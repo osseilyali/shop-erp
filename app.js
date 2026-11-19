@@ -15,9 +15,20 @@ const IMPORT_EXTRAS = ['Sea freight','Customs duties','Transit agent','Port & ha
 const MARKET_EXTRAS = ['Transport','Loading & porters'];
 const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost','Own use','Other increase','Other decrease'];
 const DEFAULT_CATS = ['Appliances','Plumbing'];
-const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','shop','team'];
+const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses'];
+const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts'];
+const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
+// Older records only say how they were paid; this maps them to the matching account.
+const METHOD_ACC = {'Cash':'cash', 'Orange Money':'orange', 'MTN MoMo':'mtn', 'Bank transfer':'bank', 'Cheque':'bank'};
+const DEFAULT_ACCOUNTS = [
+  {id:'cash', name:'Cash box', type:'cash', currency:'GNF'},
+  {id:'orange', name:'Orange Money', type:'mobile', currency:'GNF'},
+  {id:'mtn', name:'MTN MoMo', type:'mobile', currency:'GNF'},
+  {id:'bank', name:'Bank account', type:'bank', currency:'GNF'},
+  {id:'safe', name:'Home safe', type:'safe', currency:'GNF'},
+  {id:'usd', name:'US dollars', type:'cash', currency:'USD'}
+];
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 const ICONS = {
@@ -31,6 +42,7 @@ const ICONS = {
   wallet:'<path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7l12-4v4"/><circle cx="16.5" cy="13.5" r="1.3"/>',
   chart:'<path d="M3 3v18h18"/><path d="M7 15v3M11 10v8M15 12v6M19 6v12"/>',
   sliders:'<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  bank:'<path d="M3 10l9-6 9 6"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 20h18"/>',
   team:'<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="M19 8h3M20.5 6.5v3"/>',
   dots:'<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>',
   plus:'<path d="M12 5v14M5 12h14"/>',
@@ -98,9 +110,9 @@ const LIVE = {};
 const S = {
   auth:'loading', user:null, email:'', isOwner:false, fs:null, authObj:null,
   cacheLoaded:false, slow:false, online:navigator.onLine, unsynced:false, listenErr:'', installEvt:null,
-  settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}
+  settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}, accounts:{}, transfers:{}, equity:{}, cashcounts:{}
 };
-const freshCart = () => ({items:[], customerId:'', walkin:'', discount:'', paid:'', paidTouched:false, method:'Cash', date:todayStr(), note:'', q:''});
+const freshCart = () => ({items:[], customerId:'', walkin:'', discount:'', paid:'', paidTouched:false, method:'Cash', accountId:'', date:todayStr(), note:'', q:''});
 const UI = {
   view:'home', busy:false,
   cart: freshCart(),
@@ -108,7 +120,7 @@ const UI = {
   salesQ:'', salesMonth: todayStr().slice(0,7),
   purchQ:'', purchStatus:'',
   custQ:'', supQ:'',
-  expMonth: todayStr().slice(0,7), exp:{date:todayStr(), category:'Rent', amount:'', method:'Cash', note:''}, confirmExp:'',
+  expMonth: todayStr().slice(0,7), exp:{date:todayStr(), category:'Rent', amount:'', method:'Cash', accountId:'', note:''}, accSetup:null, confirmExp:'',
   repPeriod:'m:' + todayStr().slice(0,7),
   shop:null,
   team:{email:'', name:'', code:''},
@@ -201,14 +213,44 @@ function derive(){
   }
   const supBal = {};
   for (const [id, p] of Object.entries(S.purchases)){ if (!p.supplierId) continue; supBal[p.supplierId] = (supBal[p.supplierId] || 0) + pc[id].balance; }
-  D = {sales, expenses, payments, prod, pc, maxNoBy, stockValue, transitValue, transitCount, custBal, supBal, invRemain};
+  // money accounts: opening balance + every movement dated on or after the account's start date
+  const acc = {}, extraCosts = [];
+  for (const [id, a] of Object.entries(S.accounts)) acc[id] = {bal: +a.opening || 0, from: a.openingDate || '', cur: a.currency || 'GNF', rows: [], lastCount: null};
+  const accOf = r => { if (r.accountId && acc[r.accountId]) return r.accountId; const m = METHOD_ACC[r.method]; return m && acc[m] ? m : ''; };
+  const mv = (id, date, amt, kind, what, sub, act, at) => { const x = acc[id]; if (!x || !amt || !date || (x.from && date < x.from)) return; x.bal += amt; x.rows.push({date, amt, kind, what, sub, act, at: at || ''}); };
+  const nm = id => (S.accounts[id] || {}).name || '?';
+  for (const s of sales) if (!s.void && s.paid) mv(accOf(s), s.date, s.paid, 'sale', `Sale ${invNoS(s)}`, custName(s), `data-act="openSale" data-id="${s.id}"`, s.at);
+  for (const p of payments) if (!p.void) mv(accOf(p), p.date, p.amount, 'sale', 'Customer payment', (S.customers[p.customerId] || {}).name || '', p.customerId ? `data-act="openCustomer" data-id="${p.customerId}"` : '', p.at);
+  for (const e of expenses) if (!e.void) mv(accOf(e), e.date, -e.amount, 'exp', e.category, e.note || '', '', e.at);
+  for (const [id, p] of Object.entries(S.purchases)) for (const pay of Object.values(p.payments || {})){
+    if (!pay || pay.void) continue; const a = accOf(pay);
+    mv(a, pay.date || p.date, -((acc[a] && acc[a].cur === 'USD') ? (+pay.fxAmount || 0) : (+pay.amount || 0)), 'sup', 'Supplier payment', (S.suppliers[p.supplierId] || {}).name || p.ref || '', `data-act="openPurchase" data-id="${id}"`, pay.at);
+  }
+  for (const [id, t] of Object.entries(S.transfers)){
+    if (t.void) continue; const fee = +t.fee || 0, fcur = (acc[t.from] || {}).cur;
+    mv(t.from, t.date, -((+t.amount || 0) + fee), 'tr', `Transfer to ${nm(t.to)}`, fee ? `includes ${fmtAcc(fee, fcur)} fee` : (t.note || ''), `data-act="openTransfer" data-id="${id}"`, t.at);
+    mv(t.to, t.date, +t.toAmount || 0, 'tr', `Transfer from ${nm(t.from)}`, t.note || '', `data-act="openTransfer" data-id="${id}"`, t.at);
+    if (fee && acc[t.from] && !(acc[t.from].from && t.date < acc[t.from].from)) extraCosts.push({id: 'fee-' + id, date: t.date, category: 'Bank & mobile money fees', amount: fcur === 'USD' ? fee * (+t.rate || 0) : fee, method: nm(t.from), note: 'Transfer fee', auto: true});
+  }
+  for (const [id, q] of Object.entries(S.equity)){
+    if (q.void) continue;
+    mv(q.accountId, q.date, q.kind === 'out' ? -(+q.amount || 0) : (+q.amount || 0), 'own', q.kind === 'out' ? 'Owner took money out' : 'Owner put money in', q.note || '', `data-act="openEquity" data-id="${id}"`, q.at);
+  }
+  for (const [id, k] of Object.entries(S.cashcounts)){
+    const x = acc[k.accountId]; if (!x) continue;
+    if (!x.lastCount || String(k.at || k.date) > String(x.lastCount.at || x.lastCount.date)) x.lastCount = k;
+    const diff = +k.diff || 0;
+    mv(k.accountId, k.date, diff, 'count', 'Cash count difference', `counted ${fmtAcc(+k.counted || 0, x.cur)}`, '', k.at);
+    if (diff && x.cur !== 'USD' && !(x.from && k.date < x.from)) extraCosts.push({id: 'cc-' + id, date: k.date, category: 'Cash count difference', amount: -diff, method: nm(k.accountId), note: diff < 0 ? 'Cash short at the count' : 'Cash over at the count', auto: true});
+  }
+  D = {sales, expenses, payments, prod, pc, maxNoBy, stockValue, transitValue, transitCount, custBal, supBal, invRemain, acc, extraCosts};
 }
 derive();
 
 function periodStats(pred){
   const ss = D.sales.filter(s => !s.void && pred(s.date));
   const revenue = sum(ss, s => s.total), cogs = sum(ss, s => s.cogs), gross = revenue - cogs;
-  const ex = D.expenses.filter(e => !e.void && pred(e.date)), expenses = sum(ex, e => e.amount);
+  const ex = [...D.expenses, ...D.extraCosts].filter(e => !e.void && pred(e.date)), expenses = sum(ex, e => e.amount);
   const pays = D.payments.filter(p => !p.void && pred(p.date));
   return {ss, ex, pays, count: ss.length, revenue, cogs, gross, expenses, net: gross - expenses, margin: revenue > 0 ? gross / revenue : 0, cashIn: sum(ss, s => s.paid) + sum(pays, p => p.amount)};
 }
@@ -239,6 +281,49 @@ function findProdByLabel(label){
   return byName.length === 1 ? byName[0][0] : '';
 }
 function itemDetail(i){ const p = S.products[i.productId] || {}; return [i.brand != null ? i.brand : p.brand, i.sku != null ? i.sku : p.sku].filter(Boolean).join(' · '); }
+/* ----- money accounts ----- */
+const accList = filter => Object.entries(S.accounts).filter(([, a]) => a.active !== false && (!filter || filter(a))).sort((a, b) => ((a[1].order ?? 99) - (b[1].order ?? 99)) || String(a[1].name).localeCompare(String(b[1].name)));
+const hasAccounts = () => accList().length > 0;
+const accName = id => (S.accounts[id] || {}).name || 'No account';
+const accCur = id => (S.accounts[id] || {}).currency || 'GNF';
+const isUSD = id => accCur(id) === 'USD';
+const fmtAcc = (v, cur) => cur === 'USD' ? (v < 0 ? '−$' : '$') + nf2.format(Math.abs(Math.round((v || 0) * 100) / 100)) : money(v) + ' GNF';
+const forStaff = a => S.isOwner || a.type !== 'safe';
+function defaultAcc(){ const l = accList(a => a.currency !== 'USD' && forStaff(a)); const c = l.find(([id]) => id === 'cash'); return (c || l[0] || [''])[0]; }
+function accSelect(id, bind, cur, o = {}){
+  const list = accList(a => (o.usd || a.currency !== 'USD') && (o.only ? o.only(a) : forStaff(a)));
+  return `<select id="${id}" class="inp" data-bind="${bind}"${o.rr ? ' data-rr' : ''}>${list.map(([k, a]) => opt(k, a.name + (a.currency === 'USD' ? ' (USD)' : ''), k === cur)).join('')}</select>`;
+}
+// "Paid into / from" for GNF money: an account once accounts exist, otherwise the old payment method list.
+function payField(id, label, bindAcc, bindMethod, st){
+  if (hasAccounts()){
+    if (!st.accountId || !S.accounts[st.accountId] || isUSD(st.accountId) || S.accounts[st.accountId].active === false) st.accountId = defaultAcc();
+    return `<div class="field"><label for="${id}">${label}</label>${accSelect(id, bindAcc, st.accountId)}</div>`;
+  }
+  return `<div class="field"><label for="${id}">Paid by</label><select id="${id}" class="inp" data-bind="${bindMethod}">${opts(METHODS, st.method)}</select></div>`;
+}
+function payData(st){
+  if (!hasAccounts()) return {method: st.method};
+  const a = st.accountId && S.accounts[st.accountId] && !isUSD(st.accountId) ? st.accountId : defaultAcc();
+  return {accountId: a, method: accName(a)};
+}
+// Supplier payments may also come out of the dollar account.
+function supplierPayFields(px, pay, p){
+  if (hasAccounts() && (!pay.accountId || !S.accounts[pay.accountId])) pay.accountId = defaultAcc();
+  const usd = hasAccounts() && isUSD(pay.accountId);
+  if (usd && !pay.rate && p && p.currency === 'USD' && num(p.rate)) pay.rate = String(p.rate);
+  return `${hasAccounts() ? `<div class="field"><label for="${px}-acc">Paid from</label>${accSelect(px + '-acc', 'pay.accountId', pay.accountId, {usd: true, rr: true})}</div>` : `<div class="field"><label for="${px}-m">Paid by</label><select id="${px}-m" class="inp" data-bind="pay.method">${opts(METHODS, pay.method)}</select></div>`}
+    <div class="field"><label for="${px}-a">Amount (${usd ? 'USD' : 'GNF'})</label><input id="${px}-a" class="inp n" inputmode="decimal" value="${esc(pay.amount)}" data-bind="pay.amount"${usd ? ' data-rr' : ''} placeholder="0"></div>
+    ${usd ? `<div class="field"><label for="${px}-r">Rate: GNF for 1 USD</label><input id="${px}-r" class="inp n" inputmode="decimal" value="${esc(pay.rate || '')}" data-bind="pay.rate" data-rr placeholder="e.g. 8650"><span class="hint">${num(pay.amount) && num(pay.rate) ? `Takes ${money(num(pay.amount) * num(pay.rate))} GNF off what you owe` : 'Used to take the payment off what you owe in GNF'}</span></div>` : ''}`;
+}
+function supplierPayData(pay){
+  const a = num(pay.amount); if (!(a > 0)) return {err: 'Enter the amount paid.'};
+  if (hasAccounts() && isUSD(pay.accountId)){
+    const r = num(pay.rate); if (!(r > 0)) return {err: 'Enter the exchange rate for the dollars paid.'};
+    return {data: {amount: Math.round(a * r), fxAmount: a, rate: r, accountId: pay.accountId, method: accName(pay.accountId)}};
+  }
+  return {data: {amount: a, ...payData(pay)}};
+}
 const qtyU = (q, unit) => `${qtyFmt(q)} ${esc(unit && unit !== 'piece' ? unit : 'pcs')}`;
 function allCats(){ const s = new Set(DEFAULT_CATS); Object.values(S.products).forEach(p => { if (p.category) s.add(p.category); }); return [...s]; }
 function isLow(id){ const p = S.products[id], x = D.prod[id]; if (!p || !x || p.active === false) return false; const min = +p.min || 0; return min > 0 ? x.stock <= min : (x.moves > 0 && x.stock <= 0); }
@@ -414,7 +499,7 @@ async function emailSubmit(){
 const NAV = () => [
   {group:'Daily', items:[['home','Dashboard','home'], ['sell','New sale','cart'], ['sales','Sales & invoices','receipt'], ['expenses','Expenses','wallet']]},
   {group:'Goods', items:[['stock','Stock','box'], ['purchases','Purchases & imports','truck'], ['suppliers','Suppliers','store']]},
-  {group:'Money', items:[['customers','Customers & credit','users'], ['reports','Reports','chart']]}
+  {group:'Money', items:[['customers','Customers & credit','users'], ...(S.isOwner ? [['money','Money accounts','bank']] : []), ['reports','Reports','chart']]}
 ];
 function syncInfo(){
   if (!S.online) return ['warn', S.unsynced ? 'Offline · changes saved on this device' : 'Offline · working from this device'];
@@ -437,7 +522,7 @@ function renderRail(){
     </div>`;
 }
 function renderTabbar(){
-  const more = ['sales','customers','suppliers','expenses','reports','shop','team'].includes(UI.view);
+  const more = ['sales','customers','suppliers','expenses','reports','money','shop','team'].includes(UI.view);
   const t = (r, l, i, cls = '') => `<a class="tab ${cls}" href="#${r}"${UI.view === r ? ' aria-current="page"' : ''}><span class="ti">${ic(i)}</span>${l}</a>`;
   $('#tabbar').innerHTML = t('home','Home','home') + t('stock','Stock','box') + t('sell','Sell','cart','sell') + t('purchases','Buy','truck') +
     `<button class="tab" type="button" data-act="more"${more ? ' aria-current="page"' : ''}><span class="ti">${ic('dots')}</span>More</button>`;
@@ -462,7 +547,7 @@ function mobileTop(){
 const VIEWS = {};
 function renderView(){
   const v = $('#view');
-  if (UI.view === 'team' && !S.isOwner) UI.view = 'home';
+  if ((UI.view === 'team' || UI.view === 'money') && !S.isOwner) UI.view = 'home';
   withFocus(v, () => { v.innerHTML = mobileTop() + banners() + (VIEWS[UI.view] || VIEWS.home)(); });
 }
 function renderAll(){
@@ -520,6 +605,8 @@ VIEWS.home = function(){
       ${recent.length ? `<div class="list">${recent.map(s => saleLi(s)).join('')}</div>` : emptyBox('No sales yet', 'Sales you record show up here.', `<a class="btn primary sm" href="#sell">${ic('plus')}New sale</a>`)}
     </section>
     <div class="stack">
+      ${S.isOwner && hasAccounts() ? `<section class="panel"><div class="panel-h"><h2>Money</h2><a class="btn sm" href="#money">Accounts</a></div><div class="list">${accList().map(([id, a]) => `<button type="button" class="li" data-act="openAccount" data-id="${id}"><span class="nm"><b>${esc(a.name)}</b><span class="sub">${esc(ACC_TYPES[a.type] || '')}</span></span><span class="amt${D.acc[id].bal < 0 ? ' errline' : ''}">${esc(fmtAcc(D.acc[id].bal, a.currency))}</span></button>`).join('')}</div></section>` : ''}
+      ${S.isOwner && !hasAccounts() && !loading() ? `<section class="panel"><div class="panel-h"><h2>Money accounts</h2><a class="btn sm primary" href="#money">Set up</a></div><div class="panel-b"><p class="sub">Track the cash box, Orange Money, MTN MoMo, the bank, the home safe and dollars.</p></div></section>` : ''}
       <section class="panel"><div class="panel-h"><h2>Low stock</h2>${low.length ? `<span class="pill warn">${low.length} to reorder</span>` : ''}</div>
         ${low.length ? `<div class="list">${low.slice(0, 8).map(id => { const p = S.products[id], x = D.prod[id]; return `<button type="button" class="li" data-act="openProduct" data-id="${id}"><span class="nm"><b>${esc(p.name)}</b><span class="sub">${esc(p.category || '')}${+p.min ? ` · reorder at ${qtyFmt(p.min)}` : ''}${x.transit ? ` · ${qtyFmt(x.transit)} on the way` : ''}</span></span><span class="amt"><span class="pill ${x.stock <= 0 ? 'bad' : 'warn'}">${qtyU(x.stock, p.unit)}</span></span></button>`; }).join('')}</div>` : emptyBox('Nothing running low', 'Set a reorder level on a product to get warned here.')}
       </section>
@@ -588,7 +675,7 @@ VIEWS.sell = function(){
       <div class="form">
         <div class="field"><label for="sell-paid">Amount paid now</label><input id="sell-paid" class="inp n" inputmode="decimal" value="${esc(c.paidTouched ? c.paid : (total ? String(Math.round(total)) : ''))}" data-in="paid" data-sa>
           <span class="inline"><button type="button" class="btn ghost sm" data-act="paidFull">Paid in full</button><button type="button" class="btn ghost sm" data-act="paidCredit">All on credit</button></span></div>
-        <div class="field"><label for="sell-method">Paid by</label><select id="sell-method" class="inp" data-bind="cart.method">${opts(METHODS, c.method)}</select></div>
+        ${payField('sell-method', 'Paid into', 'cart.accountId', 'cart.method', c)}
       </div>
       ${credit > 0.5 ? `<div class="banner" style="padding:9px 12px"><div><b>${money(credit)} GNF on credit</b><span class="sub">${cust ? `Added to what ${esc(cust.name)} owes.` : 'Choose a customer so the balance is tracked.'}</span></div></div>` : ''}
       ${credit < -0.5 ? `<p class="errline">Amount paid is more than the total.</p>` : ''}
@@ -698,7 +785,7 @@ VIEWS.suppliers = function(){
 VIEWS.expenses = function(){
   const e = UI.exp;
   const months = [...new Set([todayStr().slice(0, 7), ...D.expenses.map(x => x.date.slice(0, 7))])].sort().reverse();
-  const list = D.expenses.filter(x => UI.expMonth === 'all' || x.date.slice(0, 7) === UI.expMonth);
+  const list = [...D.expenses, ...D.extraCosts].filter(x => UI.expMonth === 'all' || x.date.slice(0, 7) === UI.expMonth).sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
   const live = list.filter(x => !x.void);
   const byCat = {}; live.forEach(x => { byCat[x.category] = (byCat[x.category] || 0) + x.amount; });
   const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]); const max = Math.max(1, ...cats.map(c => c[1]));
@@ -708,13 +795,13 @@ VIEWS.expenses = function(){
     <div class="field"><label for="exp-date">Date</label><input id="exp-date" class="inp" type="date" value="${esc(e.date)}" data-bind="exp.date"></div>
     <div class="field"><label for="exp-cat">Category</label><select id="exp-cat" class="inp" data-bind="exp.category">${opts(EXP_CATS, e.category)}</select></div>
     <div class="field"><label for="exp-amt">Amount (GNF)</label><input id="exp-amt" class="inp n" inputmode="decimal" value="${esc(e.amount)}" data-bind="exp.amount" placeholder="0"></div>
-    <div class="field"><label for="exp-method">Paid by</label><select id="exp-method" class="inp" data-bind="exp.method">${opts(METHODS, e.method)}</select></div>
+    ${payField('exp-method', 'Paid from', 'exp.accountId', 'exp.method', e)}
     <div class="field full"><label for="exp-note">Note</label><div class="inline"><input id="exp-note" class="inp grow" value="${esc(e.note)}" data-bind="exp.note" placeholder="e.g. Generator fuel, 20 liters"><button type="button" class="btn primary" data-act="addExpense">${ic('plus')}Add expense</button></div></div>
   </div></div></section>
   <div class="toolbar"><select id="exp-m" class="inp" data-bind="expMonth" data-rr aria-label="Month">${opt('all', 'All months', UI.expMonth === 'all')}${months.map(k => opt(k, mlabel(k), k === UI.expMonth)).join('')}</select><span class="sub">Total <b>${money(total)} GNF</b></span></div>
   <div class="grid2">
-    <section class="panel"><div class="panel-h"><h2>By category</h2></div><div class="panel-b">${cats.length ? `<div class="bars">${cats.map(([c, v]) => `<div class="bar-row"><span>${esc(c)}</span><span class="num">${money(v)}</span><div class="bar-track"><div class="bar-fill copper" style="width:${(v / max * 100).toFixed(1)}%"></div></div></div>`).join('')}</div>` : emptyBox('No expenses', 'Nothing recorded for this period.')}</div></section>
-    <section class="panel"><div class="panel-h"><h2>Entries</h2></div>${list.length ? `<div class="scroll"><table class="tbl"><tbody>${list.map(x => `<tr class="${x.void ? 'void' : ''}"><td>${fdateShort(x.date)}</td><td><b>${esc(x.category)}</b><span class="sub">${esc(x.note || '')}${x.note ? ' · ' : ''}${esc(x.method || '')}</span></td><td class="n">${money(x.amount)}</td><td class="n">${x.void ? '<span class="pill bad">Removed</span>' : UI.confirmExp === x.id ? `<span class="inline"><button type="button" class="btn danger solid sm" data-act="voidExpense" data-id="${x.id}">Remove</button><button type="button" class="btn ghost sm" data-act="cancelExp">Keep</button></span>` : `<button type="button" class="btn ghost sm iconbtn" data-act="askExp" data-id="${x.id}" aria-label="Remove expense">${ic('x')}</button>`}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('No expenses', 'Rent, salaries, fuel and other running costs go here. They are taken off gross profit in Reports.')}</section>
+    <section class="panel"><div class="panel-h"><h2>By category</h2></div><div class="panel-b">${cats.length ? `<div class="bars">${cats.map(([c, v]) => `<div class="bar-row"><span>${esc(c)}</span><span class="num">${money(v)}</span><div class="bar-track"><div class="bar-fill copper" style="width:${(Math.max(0, v) / max * 100).toFixed(1)}%"></div></div></div>`).join('')}</div>` : emptyBox('No expenses', 'Nothing recorded for this period.')}</div></section>
+    <section class="panel"><div class="panel-h"><h2>Entries</h2></div>${list.length ? `<div class="scroll"><table class="tbl"><tbody>${list.map(x => `<tr class="${x.void ? 'void' : ''}"><td>${fdateShort(x.date)}</td><td><b>${esc(x.category)}</b><span class="sub">${esc(x.note || '')}${x.note ? ' · ' : ''}${esc(x.method || '')}</span></td><td class="n">${money(x.amount)}</td><td class="n">${x.auto ? '<span class="pill">Automatic</span>' : x.void ? '<span class="pill bad">Removed</span>' : UI.confirmExp === x.id ? `<span class="inline"><button type="button" class="btn danger solid sm" data-act="voidExpense" data-id="${x.id}">Remove</button><button type="button" class="btn ghost sm" data-act="cancelExp">Keep</button></span>` : `<button type="button" class="btn ghost sm iconbtn" data-act="askExp" data-id="${x.id}" aria-label="Remove expense">${ic('x')}</button>`}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('No expenses', 'Rent, salaries, fuel and other running costs go here. They are taken off gross profit in Reports.')}</section>
   </div>`;
 };
 
@@ -782,6 +869,214 @@ function monthChart(){
       <text x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle"${i === 11 ? ' class="now"' : ''}>${MON[+d.k.slice(5) - 1]}${d.k.slice(5) === '01' || i === 0 ? ' ’' + d.k.slice(2, 4) : ''}</text>`;
   }).join('');
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Sales and gross profit for each of the last 12 months">${g}</svg>`;
+}
+
+VIEWS.money = function(){
+  const head = (actions = '') => header('Money', 'Money accounts', actions);
+  if (!S.isOwner) return head() + `<section class="panel">${emptyBox('Only the owners see this page', 'Ask the owner for account balances.')}</section>`;
+  if (!Object.keys(S.accounts).length) return head() + accountSetup();
+  const accs = accList(), mth = todayStr().slice(0, 7);
+  const gnfAccs = accs.filter(([, a]) => a.currency !== 'USD');
+  const gnf = sum(gnfAccs, ([id]) => D.acc[id].bal);
+  const rowsM = gnfAccs.flatMap(([id]) => D.acc[id].rows).filter(r => r.date.slice(0, 7) === mth);
+  const byKind = k => sum(rowsM.filter(r => r.kind === k), r => r.amt);
+  const neg = v => Math.round(v) ? '−' + money(v) : '0';
+  const ownIn = sum(rowsM.filter(r => r.kind === 'own' && r.amt > 0), r => r.amt), ownOut = -sum(rowsM.filter(r => r.kind === 'own' && r.amt < 0), r => r.amt);
+  const recent = accs.flatMap(([id, a]) => D.acc[id].rows.map(r => ({...r, acc: a.name, cur: a.currency}))).sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : String(b.at).localeCompare(String(a.at))).slice(0, 20);
+  return head(`<button type="button" class="btn" data-act="cashCount">Count cash</button><button type="button" class="btn" data-act="ownerMoney">Owner money</button><button type="button" class="btn primary" data-act="newTransfer">Transfer</button>`) +
+  `<section class="tiles">
+    ${tileRaw('All GNF accounts', `${short(gnf)}<small>GNF</small>`, `${gnfAccs.length} account${gnfAccs.length === 1 ? '' : 's'}`, '', 'hl', `${money(gnf)} GNF`)}
+    ${accs.map(([id, a]) => { const x = D.acc[id], lc = x.lastCount; return `<button type="button" class="tile" data-act="openAccount" data-id="${id}"><span class="k">${esc(a.name)}</span><span class="v${x.bal < 0 ? ' negv' : ''}" title="${esc(fmtAcc(x.bal, a.currency))}">${a.currency === 'USD' ? esc(fmtAcc(x.bal, 'USD')) : `${short(x.bal)}<small>GNF</small>`}</span><span class="s">${esc(ACC_TYPES[a.type] || '')}${lc ? ` · counted ${fdateShort(lc.date)}` : ''}</span></button>`; }).join('')}
+  </section>
+  <div class="grid2">
+    <section class="panel"><div class="panel-h"><h2>Latest movements</h2><button type="button" class="btn sm" data-act="newAccount">${ic('plus')}Add account</button></div>
+      ${recent.length ? `<div class="list">${recent.map(r => `<${r.act ? 'button type="button"' : 'div'} class="li" ${r.act || ''}><span class="nm"><b>${esc(r.what)}</b><span class="sub">${fdateShort(r.date)} · ${esc(r.acc)}${r.sub ? ' · ' + esc(r.sub) : ''}</span></span><span class="amt ${r.amt < 0 ? 'out' : 'in'}">${r.amt > 0 ? '+' : '−'}${esc(fmtAcc(Math.abs(r.amt), r.cur))}</span></${r.act ? 'button' : 'div'}>`).join('')}</div>` : emptyBox('No movements yet', 'Sales, payments, expenses and transfers will show here.')}
+    </section>
+    <section class="panel"><div class="panel-h"><h2>${MON[+mth.slice(5) - 1]} in the GNF accounts</h2></div><div class="panel-b"><div class="totals">
+      <div class="row"><span class="muted">Received from customers</span><span>${money(byKind('sale'))}</span></div>
+      <div class="row"><span class="muted">Spent on expenses</span><span>${neg(-byKind('exp'))}</span></div>
+      <div class="row"><span class="muted">Paid to suppliers</span><span>${neg(-byKind('sup'))}</span></div>
+      <div class="row"><span class="muted">Owner took out</span><span>${neg(ownOut)}</span></div>
+      <div class="row"><span class="muted">Owner put in</span><span>${money(ownIn)}</span></div>
+      <div class="row"><span class="muted">Transfers, fees and count differences</span><span>${money(byKind('tr') + byKind('count'))}</span></div>
+      <div class="row grand"><span>Change this month</span><span>${money(sum(rowsM, r => r.amt))} <small class="sub">GNF</small></span></div>
+    </div><p class="hint" style="margin-top:10px">Money the owner takes out isn’t an expense, so it doesn’t lower the profit in Reports.</p></div></section>
+  </div>`;
+};
+function accountSetup(){
+  if (!UI.accSetup) UI.accSetup = {date: todayStr(), rows: DEFAULT_ACCOUNTS.map(a => ({...a, on: true, opening: ''}))};
+  const s = UI.accSetup;
+  return `<section class="panel"><div class="panel-h"><h2>Set up the money accounts</h2></div><div class="panel-b stack">
+    <p class="sub">One account for each place the shop keeps money. Enter how much is in each one at the start of the day you pick. From then on, sales, customer payments, expenses, supplier payments and transfers keep the balances up to date.</p>
+    <div class="field" style="max-width:260px"><label for="as-date">Balances at the start of</label><input id="as-date" class="inp" type="date" value="${esc(s.date)}" data-bind="accSetup.date"></div>
+    <div class="scroll"><table class="tbl"><thead><tr><th>Use</th><th>Account</th><th>Currency</th><th class="n">Amount in it</th></tr></thead><tbody>
+    ${s.rows.map((r, i) => `<tr><td><input type="checkbox" id="as-on-${i}" data-bind="accSetup.rows.${i}.on"${r.on ? ' checked' : ''} aria-label="Use ${esc(r.name)}"></td><td><input id="as-name-${i}" class="inp" style="min-width:150px" value="${esc(r.name)}" data-bind="accSetup.rows.${i}.name" aria-label="Account name"></td><td>${r.currency}</td><td><input id="as-open-${i}" class="inp n" style="width:150px" inputmode="decimal" value="${esc(r.opening)}" data-bind="accSetup.rows.${i}.opening" placeholder="0" aria-label="Amount in ${esc(r.name)} (${r.currency})"></td></tr>`).join('')}
+    </tbody></table></div>
+    <div><button type="button" class="btn primary" data-act="createAccounts">Create accounts</button></div>
+  </div></section>`;
+}
+function accountModal(id){
+  const src = id ? (S.accounts[id] || {}) : {};
+  const st = {name: src.name || '', opening: src.opening != null ? String(src.opening) : '', openingDate: src.openingDate || todayStr(), type: src.type || 'cash', currency: src.currency || 'GNF', edit: !id};
+  const m = openModal({
+    state: st, live: true, wide: !!id,
+    title: () => id ? ((S.accounts[id] || {}).name || 'Account') : 'Add account',
+    body: () => {
+      const form = `<div class="form">
+        <div class="field"><label for="am-name">Name</label><input id="am-name" class="inp" value="${esc(st.name)}" data-bind="name" placeholder="e.g. Ecobank, Wave, Second cash box"></div>
+        <div class="field"><label for="am-type">Type</label><select id="am-type" class="inp" data-bind="type"${id ? ' disabled' : ''}>${Object.entries(ACC_TYPES).map(([k, l]) => opt(k, l, k === st.type)).join('')}</select></div>
+        <div class="field"><label for="am-cur">Currency</label><select id="am-cur" class="inp" data-bind="currency"${id ? ' disabled' : ''}>${opts(['GNF', 'USD'], st.currency)}</select></div>
+        <div class="field"><label for="am-open">Amount in it at the start date</label><input id="am-open" class="inp n" inputmode="decimal" value="${esc(st.opening)}" data-bind="opening" placeholder="0"></div>
+        <div class="field"><label for="am-date">Start date</label><input id="am-date" class="inp" type="date" value="${esc(st.openingDate)}" data-bind="openingDate"><span class="hint">Movements before this date don’t count</span></div>
+      </div>`;
+      if (!id) return form;
+      const a = S.accounts[id] || src, x = D.acc[id] || {bal: 0, rows: [], cur: 'GNF'}, mth = todayStr().slice(0, 7);
+      const inM = sum(x.rows.filter(r => r.amt > 0 && r.date.slice(0, 7) === mth), r => r.amt), outM = -sum(x.rows.filter(r => r.amt < 0 && r.date.slice(0, 7) === mth), r => r.amt);
+      const asc = x.rows.slice().sort((p, q) => p.date < q.date ? -1 : p.date > q.date ? 1 : String(p.at).localeCompare(String(q.at)));
+      let run = +a.opening || 0; const lines = asc.map(r => { run += r.amt; return {...r, run}; }).reverse();
+      const lc = x.lastCount;
+      return `<section class="tiles">
+          ${tileRaw('Balance now', esc(fmtAcc(x.bal, x.cur)), esc(ACC_TYPES[a.type] || ''), '', 'hl')}
+          ${tileRaw('In this month', esc(fmtAcc(inM, x.cur)), MON[+mth.slice(5) - 1])}
+          ${tileRaw('Out this month', esc(fmtAcc(outM, x.cur)), MON[+mth.slice(5) - 1])}
+          ${tileRaw('Last cash count', lc ? fdateShort(lc.date) : '—', lc ? (Math.abs(+lc.diff || 0) > 0.005 ? `difference ${esc(fmtAcc(+lc.diff, x.cur))}` : 'matched') : 'not counted yet')}
+        </section>
+        <div class="sect"><div class="sect-h"><h3>Statement</h3><span class="sub">Newest first</span></div>
+        <div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Movement</th><th class="n">In</th><th class="n">Out</th><th class="n">Balance</th></tr></thead><tbody>
+        ${lines.slice(0, 200).map(r => `<tr${r.act ? ` tabindex="0" class="click" ${r.act}` : ''}><td>${fdateShort(r.date)}</td><td>${esc(r.what)}<span class="sub">${esc(r.sub || '')}</span></td><td class="n">${r.amt > 0 ? esc(fmtAcc(r.amt, x.cur)) : ''}</td><td class="n">${r.amt < 0 ? esc(fmtAcc(-r.amt, x.cur)) : ''}</td><td class="n">${esc(fmtAcc(r.run, x.cur))}</td></tr>`).join('')}
+        <tr><td>${a.openingDate ? fdateShort(a.openingDate) : ''}</td><td>Opening balance</td><td class="n"></td><td class="n"></td><td class="n">${esc(fmtAcc(+a.opening || 0, x.cur))}</td></tr>
+        </tbody></table></div>${lines.length > 200 ? `<p class="hint">Showing the latest 200 of ${lines.length}.</p>` : ''}</div>
+        ${st.edit ? `<div class="sect"><h3>Edit account</h3>${form}</div>` : ''}`;
+    },
+    foot: () => id && !st.edit
+      ? `<button type="button" class="btn ghost" data-act="edit">Edit account</button><span class="spacer"></span>${['cash', 'safe'].includes((S.accounts[id] || {}).type) ? `<button type="button" class="btn" data-act="count">Count cash</button>` : ''}<button type="button" class="btn primary" data-close>Done</button>`
+      : `${id ? '<button type="button" class="btn ghost danger" data-act="hide">Hide account</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">${id ? 'Save' : 'Add account'}</button>`,
+    acts: {
+      edit: () => { st.edit = true; m.render(); },
+      count: () => cashCountModal(id),
+      hide: async () => { if (await write([{col:'accounts', id, data:{active:false}}], 'Account hidden')) m.close(); },
+      save: async () => {
+        const name = st.name.trim(); if (!name) return toast('Give the account a name.');
+        if (st.opening && isNaN(parseNum(st.opening))) return toast('The amount isn’t a number.');
+        const data = {name, opening: num(st.opening), openingDate: st.openingDate || todayStr()};
+        if (!id) Object.assign(data, {type: st.type, currency: st.currency, active: true, order: Object.keys(S.accounts).length});
+        if (await write([{col:'accounts', id: id || uid(), data}], id ? 'Account saved' : 'Account added')){ if (id){ st.edit = false; m.render(); } else m.close(); }
+      }
+    }
+  });
+}
+function toAmountOf(st){ const cf = accCur(st.from), ct = accCur(st.to), a = num(st.amount), r = num(st.rate); if (cf === ct) return a; if (!r) return 0; return cf === 'GNF' ? Math.round(a / r * 100) / 100 : Math.round(a * r); }
+function transferModal(tid){
+  if (tid){
+    const st = {confirm: false};
+    const m = openModal({state: st, live: true, title: () => 'Transfer',
+      body: () => { const t = S.transfers[tid]; if (!t) return '<p class="sub">This transfer isn’t available.</p>'; return `<div class="totals">
+        <div class="row"><span class="muted">Date</span><span>${fdate(t.date)}</span></div>
+        <div class="row"><span class="muted">From ${esc(accName(t.from))}</span><span>${esc(fmtAcc(+t.amount || 0, accCur(t.from)))}</span></div>
+        <div class="row"><span class="muted">Into ${esc(accName(t.to))}</span><span>${esc(fmtAcc(+t.toAmount || 0, accCur(t.to)))}</span></div>
+        ${+t.rate ? `<div class="row"><span class="muted">Rate</span><span>${money(t.rate)} GNF for 1 USD</span></div>` : ''}
+        ${+t.fee ? `<div class="row"><span class="muted">Fee</span><span>${esc(fmtAcc(+t.fee, accCur(t.from)))}</span></div>` : ''}
+        ${t.note ? `<div class="row"><span class="muted">Note</span><span>${esc(t.note)}</span></div>` : ''}
+        <div class="row"><span class="muted">Recorded by</span><span>${esc(staffName(t.by))}</span></div>
+        ${t.void ? '<p class="errline">Cancelled</p>' : ''}</div>`; },
+      foot: () => { const t = S.transfers[tid]; if (!t || t.void) return '<span class="spacer"></span><button type="button" class="btn primary" data-close>Done</button>';
+        return st.confirm ? confirmBar('Cancel this transfer? Both balances go back to how they were.', 'voidT', 'Cancel transfer') : '<button type="button" class="btn ghost danger" data-act="ask">Cancel transfer</button><span class="spacer"></span><button type="button" class="btn primary" data-close>Done</button>'; },
+      acts: { ask: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
+        voidT: async () => { if (await write([{col:'transfers', id: tid, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Transfer cancelled')) m.close(); } }
+    });
+    return;
+  }
+  const list = accList(), pick = (k, i) => (list.find(([x]) => x === k) || list[i] || list[0] || [''])[0];
+  const st = {from: pick('cash', 0), to: pick('bank', 1), amount:'', rate:'', fee:'', date: todayStr(), note:''};
+  const m = openModal({state: st, live: true, title: () => 'Move money between accounts',
+    body: () => {
+      const cf = accCur(st.from), ct = accCur(st.to), fx = cf !== ct, recv = toAmountOf(st);
+      return `<div class="form">
+        <div class="field"><label for="tr-from">From</label>${accSelect('tr-from', 'from', st.from, {usd: true, rr: true, only: () => true})}</div>
+        <div class="field"><label for="tr-to">Into</label>${accSelect('tr-to', 'to', st.to, {usd: true, rr: true, only: () => true})}</div>
+        <div class="field"><label for="tr-amt">Amount taken out (${cf})</label><input id="tr-amt" class="inp n" inputmode="decimal" value="${esc(st.amount)}" data-bind="amount" data-rr placeholder="0"></div>
+        ${fx ? `<div class="field"><label for="tr-rate">Rate: GNF for 1 USD</label><input id="tr-rate" class="inp n" inputmode="decimal" value="${esc(st.rate)}" data-bind="rate" data-rr placeholder="e.g. 8650"><span class="hint">${recv ? `${esc(accName(st.to))} receives ${esc(fmtAcc(recv, ct))}` : 'The rate you actually got'}</span></div>` : ''}
+        <div class="field"><label for="tr-fee">Fee (${cf}) <span class="hint">(optional)</span></label><input id="tr-fee" class="inp n" inputmode="decimal" value="${esc(st.fee)}" data-bind="fee" placeholder="0"><span class="hint">Withdrawal or bank charge; counted as an expense</span></div>
+        <div class="field"><label for="tr-date">Date</label><input id="tr-date" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
+        <div class="field full"><label for="tr-note">Note</label><input id="tr-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="e.g. Deposit at the bank, dollars for the container"></div>
+      </div>`;
+    },
+    foot: () => '<button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Record transfer</button>',
+    acts: { save: async () => {
+      if (!st.from || !st.to || st.from === st.to) return toast('Pick two different accounts.');
+      const a = num(st.amount); if (!(a > 0)) return toast('Enter the amount moved.');
+      const fx = accCur(st.from) !== accCur(st.to);
+      if (fx && !(num(st.rate) > 0)) return toast('Enter the exchange rate.');
+      if (st.fee && isNaN(parseNum(st.fee))) return toast('The fee isn’t a number.');
+      if (await write([{col:'transfers', id: uid(), merge:false, data:{date: st.date || todayStr(), from: st.from, to: st.to, amount: a, toAmount: toAmountOf(st), rate: fx ? num(st.rate) : 0, fee: num(st.fee), note: st.note.trim(), by: S.email, at: nowIso()}}], 'Transfer recorded')) m.close();
+    } }
+  });
+}
+function equityModal(qid){
+  if (qid){
+    const st = {confirm: false};
+    const m = openModal({state: st, live: true, title: () => 'Owner money',
+      body: () => { const q = S.equity[qid]; if (!q) return '<p class="sub">Not available.</p>'; return `<div class="totals">
+        <div class="row"><span class="muted">${q.kind === 'out' ? 'Owner took money out' : 'Owner put money in'}</span><span>${esc(fmtAcc(+q.amount || 0, accCur(q.accountId)))}</span></div>
+        <div class="row"><span class="muted">Account</span><span>${esc(accName(q.accountId))}</span></div>
+        <div class="row"><span class="muted">Date</span><span>${fdate(q.date)}</span></div>
+        ${q.note ? `<div class="row"><span class="muted">Note</span><span>${esc(q.note)}</span></div>` : ''}
+        <div class="row"><span class="muted">Recorded by</span><span>${esc(staffName(q.by))}</span></div>
+        ${q.void ? '<p class="errline">Cancelled</p>' : ''}</div>`; },
+      foot: () => { const q = S.equity[qid]; if (!q || q.void) return '<span class="spacer"></span><button type="button" class="btn primary" data-close>Done</button>';
+        return st.confirm ? confirmBar('Cancel this entry? The account balance goes back to how it was.', 'voidQ', 'Cancel entry') : '<button type="button" class="btn ghost danger" data-act="ask">Cancel entry</button><span class="spacer"></span><button type="button" class="btn primary" data-close>Done</button>'; },
+      acts: { ask: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
+        voidQ: async () => { if (await write([{col:'equity', id: qid, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Entry cancelled')) m.close(); } }
+    });
+    return;
+  }
+  const st = {kind: 'out', accountId: defaultAcc(), amount: '', date: todayStr(), note: ''};
+  const m = openModal({state: st, live: true, title: () => 'Owner money',
+    body: () => `<div class="form">
+      <div class="field full"><div class="seg" role="group">${[['out', 'Owner takes money out'], ['in', 'Owner puts money in']].map(([v, l]) => `<button type="button" data-act="kind" data-v="${v}" aria-pressed="${st.kind === v}">${l}</button>`).join('')}</div></div>
+      <div class="field"><label for="eq-acc">${st.kind === 'out' ? 'Taken from' : 'Put into'}</label>${accSelect('eq-acc', 'accountId', st.accountId, {usd: true, rr: true, only: () => true})}</div>
+      <div class="field"><label for="eq-amt">Amount (${accCur(st.accountId)})</label><input id="eq-amt" class="inp n" inputmode="decimal" value="${esc(st.amount)}" data-bind="amount" placeholder="0"></div>
+      <div class="field"><label for="eq-date">Date</label><input id="eq-date" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
+      <div class="field full"><label for="eq-note">Note</label><input id="eq-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="${st.kind === 'out' ? 'e.g. Family expenses, school fees' : 'e.g. Money added to buy stock'}"></div>
+    </div><p class="hint">This isn’t an expense or a sale, so profit in Reports stays correct. The account balance changes.</p>`,
+    foot: () => '<button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Save</button>',
+    acts: {
+      kind: el => { st.kind = el.dataset.v; m.render(); },
+      save: async () => {
+        const a = num(st.amount); if (!(a > 0)) return toast('Enter the amount.');
+        if (!st.accountId) return toast('Pick an account.');
+        if (await write([{col:'equity', id: uid(), merge:false, data:{date: st.date || todayStr(), kind: st.kind, accountId: st.accountId, amount: a, note: st.note.trim(), by: S.email, at: nowIso()}}], st.kind === 'out' ? 'Withdrawal recorded' : 'Money added')) m.close();
+      }
+    }
+  });
+}
+function cashCountModal(accId){
+  const cashAccs = accList(a => ['cash', 'safe'].includes(a.type));
+  if (!cashAccs.length) return toast('Add a cash or safe account first.');
+  const st = {accountId: accId && S.accounts[accId] ? accId : cashAccs[0][0], counted: '', note: ''};
+  const m = openModal({state: st, live: true, title: () => 'Count the cash',
+    body: () => {
+      const x = D.acc[st.accountId] || {bal: 0, cur: 'GNF'}, cur = x.cur;
+      const has = st.counted !== '' && !isNaN(parseNum(st.counted)), diff = has ? Math.round((num(st.counted) - x.bal) * 100) / 100 : 0;
+      return `<div class="form">
+        <div class="field"><label for="cc-acc">Account</label>${accSelect('cc-acc', 'accountId', st.accountId, {usd: true, rr: true, only: a => ['cash', 'safe'].includes(a.type)})}</div>
+        <div class="field"><label for="cc-amt">Cash counted (${cur})</label><input id="cc-amt" class="inp n" inputmode="decimal" value="${esc(st.counted)}" data-bind="counted" data-rr placeholder="0"></div>
+        <div class="field full"><label for="cc-note">Note</label><input id="cc-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="Optional"></div>
+      </div>
+      <div class="totals">
+        <div class="row"><span class="muted">The app expects</span><span>${esc(fmtAcc(x.bal, cur))}</span></div>
+        ${has ? `<div class="row grand"><span>${Math.abs(diff) < 0.005 ? 'It matches' : diff < 0 ? 'Short by' : 'Over by'}</span><span class="${diff < 0 ? 'errline' : ''}">${Math.abs(diff) < 0.005 ? '✓' : esc(fmtAcc(Math.abs(diff), cur))}</span></div>` : ''}
+      </div>
+      <p class="hint">Saving sets the balance to what you counted. A difference is recorded so you can see it in the statement${cur === 'GNF' ? ' and in Expenses' : ''}.</p>`;
+    },
+    foot: () => '<button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Save count</button>',
+    acts: { save: async () => {
+      if (st.counted === '' || isNaN(parseNum(st.counted))) return toast('Enter the amount you counted.');
+      const x = D.acc[st.accountId] || {bal: 0, cur: 'GNF'}, counted = num(st.counted), diff = Math.round((counted - x.bal) * 100) / 100;
+      const msg = Math.abs(diff) < 0.005 ? 'Count saved. It matches.' : `Count saved. ${diff < 0 ? 'Short' : 'Over'} by ${fmtAcc(Math.abs(diff), x.cur)}`;
+      if (await write([{col:'cashcounts', id: uid(), merge:false, data:{date: todayStr(), accountId: st.accountId, expected: Math.round(x.bal * 100) / 100, counted, diff, note: st.note.trim(), by: S.email, at: nowIso()}}], msg)) m.close();
+    } }
+  });
 }
 
 VIEWS.team = function(){
@@ -857,7 +1152,7 @@ function closeModal(m){
 const closeAll = () => { while (MODALS.length) closeModal(MODALS[MODALS.length - 1]); };
 
 function moreSheet(){
-  const items = [['sales','Sales & invoices','receipt'], ['customers','Customers & credit','users'], ['suppliers','Suppliers','store'], ['expenses','Expenses','wallet'], ['reports','Reports','chart'], ...(S.isOwner ? [['team','Team','team']] : []), ['shop','Shop settings','sliders']];
+  const items = [['sales','Sales & invoices','receipt'], ['customers','Customers & credit','users'], ['suppliers','Suppliers','store'], ['expenses','Expenses','wallet'], ...(S.isOwner ? [['money','Money accounts','bank']] : []), ['reports','Reports','chart'], ...(S.isOwner ? [['team','Team','team']] : []), ['shop','Shop settings','sliders']];
   openModal({title: () => 'More', live: true, body: () => `<div class="navgroup">${items.map(([r, l, i]) => `<button type="button" class="navlink" data-act="go" data-to="${r}"${UI.view === r ? ' aria-current="page"' : ''}>${ic(i)}<span>${l}</span></button>`).join('')}</div><div class="sync"><span class="dot ${syncInfo()[0]}"></span>${syncInfo()[1]}</div><div class="sync"><span>${esc(S.email)}</span></div>`});
 }
 
@@ -1024,7 +1319,7 @@ function customerDetail(id){
         <div class="sect"><div class="sect-h"><h3>Receive a payment</h3>${bal > 0.5 ? `<span class="sub">Applied to the oldest unpaid invoice first</span>` : ''}</div>
           <div class="form">
             <div class="field"><label for="cp-amt">Amount (GNF)</label><input id="cp-amt" class="inp n" inputmode="decimal" value="${esc(st.pay.amount)}" data-bind="pay.amount" placeholder="${bal > 0.5 ? esc(String(Math.round(bal))) : '0'}"></div>
-            <div class="field"><label for="cp-method">Paid by</label><select id="cp-method" class="inp" data-bind="pay.method">${opts(METHODS, st.pay.method)}</select></div>
+            ${payField('cp-method', 'Paid into', 'pay.accountId', 'pay.method', st.pay)}
             <div class="field"><label for="cp-date">Date</label><input id="cp-date" class="inp" type="date" value="${esc(st.pay.date)}" data-bind="pay.date"></div>
             <div class="field"><label for="cp-note">Note</label><input id="cp-note" class="inp" value="${esc(st.pay.note)}" data-bind="pay.note" placeholder="Optional"></div>
           </div>
@@ -1041,7 +1336,7 @@ function customerDetail(id){
       payAll: () => { st.pay.amount = String(Math.round(D.custBal[id] || 0)); m.render(); },
       recordPay: async () => {
         const a = num(st.pay.amount); if (!(a > 0)) return toast('Enter the amount received.');
-        if (await write([{col:'payments', id:uid(), merge:false, data:{date: st.pay.date || todayStr(), customerId: id, amount: a, method: st.pay.method, note: st.pay.note.trim(), by: S.email, at: nowIso()}}], `Payment of ${money(a)} GNF recorded`)){ st.pay = {amount:'', method: st.pay.method, date: todayStr(), note:''}; m.render(); }
+        if (await write([{col:'payments', id:uid(), merge:false, data:{date: st.pay.date || todayStr(), customerId: id, amount: a, ...payData(st.pay), note: st.pay.note.trim(), by: S.email, at: nowIso()}}], `Payment of ${money(a)} GNF recorded`)){ st.pay = {amount:'', method: st.pay.method, accountId: st.pay.accountId, date: todayStr(), note:''}; m.render(); }
       },
       askPay: el => { st.confirmPay = el.dataset.id; m.render(); }, keepPay: () => { st.confirmPay = ''; m.render(); },
       voidPay: async el => { if (await write([{col:'payments', id:el.dataset.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Payment removed')){ st.confirmPay = ''; m.render(); } }
@@ -1076,7 +1371,7 @@ function supplierForm(id, onSaved){
   });
 }
 function supplierDetail(id){
-  const st = {pay: {purchaseId:'', amount:'', method:'Cash', date: todayStr(), note:''}};
+  const st = {pay: {purchaseId:'', amount:'', method:'Cash', accountId:'', rate:'', date: todayStr(), note:''}};
   const m = openModal({
     state: st, live: true, wide: true,
     title: () => (S.suppliers[id] || {}).name || 'Supplier',
@@ -1094,9 +1389,8 @@ function supplierDetail(id){
           ${tile('Extra costs', sum(ps, ([pid]) => D.pc[pid].extras), 'freight, customs, transport')}
         </section>
         ${open.length ? `<div class="sect"><h3>Pay this supplier</h3><div class="form">
-          <div class="field"><label for="sp-p">For purchase</label><select id="sp-p" class="inp" data-bind="pay.purchaseId">${open.map(([pid, p]) => opt(pid, `${p.ref || fdate(p.date)} · owes ${money(D.pc[pid].balance)}`, pid === st.pay.purchaseId)).join('')}</select></div>
-          <div class="field"><label for="sp-a">Amount (GNF)</label><input id="sp-a" class="inp n" inputmode="decimal" value="${esc(st.pay.amount)}" data-bind="pay.amount" placeholder="0"></div>
-          <div class="field"><label for="sp-m">Paid by</label><select id="sp-m" class="inp" data-bind="pay.method">${opts(METHODS, st.pay.method)}</select></div>
+          <div class="field"><label for="sp-p">For purchase</label><select id="sp-p" class="inp" data-bind="pay.purchaseId" data-rr>${open.map(([pid, p]) => opt(pid, `${p.ref || fdate(p.date)} · owes ${money(D.pc[pid].balance)}`, pid === st.pay.purchaseId)).join('')}</select></div>
+          ${supplierPayFields('sp', st.pay, S.purchases[st.pay.purchaseId])}
           <div class="field"><label for="sp-d">Date</label><input id="sp-d" class="inp" type="date" value="${esc(st.pay.date)}" data-bind="pay.date"></div>
         </div><div><button type="button" class="btn primary" data-act="pay">Record payment</button></div></div>` : ''}
         <div class="sect"><h3>Purchases</h3>${ps.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Reference</th><th>Status</th><th class="n">Goods GNF</th><th class="n">Still owed</th></tr></thead><tbody>${ps.map(([pid, p]) => `<tr tabindex="0" class="click" data-act="openPurchase" data-id="${pid}"><td>${fdateShort(p.date)}</td><td>${esc(p.ref || (p.kind === 'import' ? 'Import' : 'Market purchase'))}</td><td>${p.status === 'received' ? '<span class="pill good">Received</span>' : '<span class="pill warn">In transit</span>'}</td><td class="n">${money(D.pc[pid].goods)}</td><td class="n">${D.pc[pid].balance > 0.5 ? money(D.pc[pid].balance) : '<span class="pill good">Paid</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="sub">No purchases from this supplier yet.</p>'}</div>`;
@@ -1106,10 +1400,10 @@ function supplierDetail(id){
       edit: () => supplierForm(id),
       buy: () => purchaseEditor(null, (S.suppliers[id] || {}).kind === 'import' ? 'import' : 'market', id),
       pay: async () => {
-        const pid = st.pay.purchaseId, a = num(st.pay.amount);
+        const pid = st.pay.purchaseId;
         if (!pid) return toast('Pick the purchase you are paying for.');
-        if (!(a > 0)) return toast('Enter the amount paid.');
-        if (await write([{col:'purchases', id:pid, data:{payments: {[uid()]: {amount: a, method: st.pay.method, date: st.pay.date || todayStr(), note: st.pay.note.trim(), by: S.email, at: nowIso()}}}}], `Payment of ${money(a)} GNF recorded`)){ st.pay = {purchaseId:'', amount:'', method: st.pay.method, date: todayStr(), note:''}; m.render(); }
+        const r = supplierPayData(st.pay); if (r.err) return toast(r.err);
+        if (await write([{col:'purchases', id:pid, data:{payments: {[uid()]: {...r.data, date: st.pay.date || todayStr(), note: st.pay.note.trim(), by: S.email, at: nowIso()}}}}], `Payment of ${money(r.data.amount)} GNF recorded`)){ st.pay = {purchaseId:'', amount:'', method: st.pay.method, accountId: st.pay.accountId, rate:'', date: todayStr(), note:''}; m.render(); }
       }
     }
   });
@@ -1118,7 +1412,7 @@ function supplierDetail(id){
 /* ----- purchase / import editor ----- */
 function purchaseEditor(id, kind = 'market', supplierId = ''){
   const src = id ? S.purchases[id] : null; const pid = id || uid();
-  const blankPay = () => ({amount:'', method:'Cash', date: todayStr(), note:''});
+  const blankPay = () => ({amount:'', method:'Cash', accountId:'', rate:'', date: todayStr(), note:''});
   const st = src ? {
     date: src.date || todayStr(), ref: src.ref || '', supplierId: src.supplierId || '', kind: src.kind || 'market', currency: src.currency || 'GNF', rate: src.rate && src.currency !== 'GNF' ? String(src.rate) : '', status: src.status || 'received', receivedDate: src.receivedDate || '', note: src.note || '',
     lines: (src.lines || []).map(l => ({productId: l.productId, label: prodLabel(l.productId) || 'Removed product', qty: String(l.qty ?? ''), price: String(l.price ?? '')})),
@@ -1177,8 +1471,8 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
           </div>
           <div class="panel panel-b stack">
             <div class="sect-h"><h3>Paid to supplier</h3><span class="sub">${c.balance > 0.5 ? `<b>${money(c.balance)}</b> still owed` : c.goods ? 'Fully paid' : ''}</span></div>
-            ${pays.length ? `<div class="bars">${pays.map(([, p]) => `<div class="totals"><div class="row"><span>${fdateShort(p.date)} · ${esc(p.method || '')}</span><span>${money(p.amount)}</span></div></div>`).join('')}</div>` : ''}
-            <div class="inline"><input id="pay-a" class="inp n grow" inputmode="decimal" value="${esc(st.pay.amount)}" data-bind="pay.amount" placeholder="Amount GNF" aria-label="Payment amount"><select id="pay-m" class="inp" style="width:auto" data-bind="pay.method" aria-label="Paid by">${opts(METHODS, st.pay.method)}</select><button type="button" class="btn" data-act="addPay">Add payment</button></div>
+            ${pays.length ? `<div class="bars">${pays.map(([, p]) => `<div class="totals"><div class="row"><span>${fdateShort(p.date)} · ${esc(p.method || '')}${p.fxAmount ? ` · ${esc(fmtAcc(p.fxAmount, 'USD'))}` : ''}</span><span>${money(p.amount)}</span></div></div>`).join('')}</div>` : ''}
+            <div class="form">${supplierPayFields('pe-pay', st.pay, {currency: st.currency, rate: st.rate})}</div><div><button type="button" class="btn" data-act="addPay">Add payment</button></div>
             ${c.goods > 0 && !pays.length ? `<button type="button" class="btn ghost sm" style="align-self:flex-start" data-act="paidFull">Mark goods as fully paid</button>` : ''}
           </div>
         </div>
@@ -1206,13 +1500,13 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
       newProd: () => productModal(null, {onSaved: (newId, doc) => { const empty = st.lines.find(l => !l.productId && !l.label); const line = {productId: newId, label: prodLabel(newId, doc), qty:'', price: st.currency === 'GNF' && doc.cost ? String(doc.cost) : ''}; if (empty) Object.assign(empty, line); else st.lines.push(line); m.render(); }}),
       addExtra: el => { st.extras.push({label: el.dataset.v || '', amount:''}); m.render(); const n = document.getElementById('xa-' + (st.extras.length - 1)); if (n) n.focus(); },
       rmExtra: el => { st.extras.splice(+el.dataset.i, 1); m.render(); },
-      paidFull: () => { st.pay.amount = String(Math.round(calc().balance)); m.render(); },
+      paidFull: () => { const bal = calc().balance, r = num(st.pay.rate || (st.currency === 'USD' ? st.rate : '')); st.pay.amount = hasAccounts() && isUSD(st.pay.accountId) && r ? String(Math.round(bal / r * 100) / 100) : String(Math.round(bal)); m.render(); },
       addPay: async () => {
-        const a = num(st.pay.amount); if (!(a > 0)) return toast('Enter the amount paid to the supplier.');
-        const payId = uid(); const pay = {amount: a, method: st.pay.method, date: todayStr(), note:'', by: S.email, at: nowIso()};
+        const r = supplierPayData(st.pay); if (r.err) return toast(r.err);
+        const payId = uid(); const pay = {...r.data, date: todayStr(), note:'', by: S.email, at: nowIso()};
         if (id){ if (!(await write([{col:'purchases', id:pid, data:{payments: {[payId]: pay}}}], 'Payment recorded'))) return; }
         else toast('Payment added. It is saved when you record the purchase.');
-        st.payments[payId] = pay; st.pay = blankPay(); m.render();
+        st.payments[payId] = pay; st.pay = {...blankPay(), accountId: st.pay.accountId}; m.render();
       },
       askDel: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
       del: async () => { if (await write([{col:'purchases', id:pid, data:{deleted:true}}], 'Purchase deleted')) m.close(); },
@@ -1405,6 +1699,21 @@ const ACT = {
   openSupplier: el => supplierDetail(el.dataset.id),
   openSale: el => invoiceModal(el.dataset.id),
   editMember: el => memberModal(el.dataset.id),
+  openAccount: el => accountModal(el.dataset.id),
+  newAccount: () => accountModal(null),
+  newTransfer: () => transferModal(null),
+  openTransfer: el => transferModal(el.dataset.id),
+  ownerMoney: () => equityModal(null),
+  openEquity: el => equityModal(el.dataset.id),
+  cashCount: () => cashCountModal(''),
+  createAccounts: async () => {
+    const s = UI.accSetup; if (!s) return;
+    const rows = s.rows.filter(r => r.on && String(r.name).trim());
+    if (!rows.length) return toast('Tick at least one account.');
+    if (rows.some(r => r.opening && isNaN(parseNum(r.opening)))) return toast('One of the amounts isn’t a number.');
+    const ops = rows.map((r, i) => ({col:'accounts', id: r.id, data:{name: String(r.name).trim(), type: r.type, currency: r.currency, opening: num(r.opening), openingDate: s.date || todayStr(), active: true, order: i}}));
+    if (await write(ops, 'Money accounts created')){ UI.accSetup = null; renderView(); }
+  },
   addMember: async () => {
     const t = UI.team; const email = t.email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast('Enter a valid email address.');
@@ -1422,7 +1731,7 @@ const ACT = {
     saveDraft(); renderView();
   },
   cartRemove: el => { UI.cart.items.splice(+el.dataset.i, 1); saveDraft(); renderView(); },
-  cartClear: () => { UI.cart = Object.assign(freshCart(), {method: UI.cart.method}); saveDraft(); renderView(); },
+  cartClear: () => { UI.cart = Object.assign(freshCart(), {method: UI.cart.method, accountId: UI.cart.accountId}); saveDraft(); renderView(); },
   paidFull: () => { UI.cart.paidTouched = false; UI.cart.paid = ''; saveDraft(); renderView(); },
   paidCredit: () => { UI.cart.paidTouched = true; UI.cart.paid = '0'; saveDraft(); renderView(); },
   newCustomerForSale: () => customerForm(null, id => { UI.cart.customerId = id; saveDraft(); renderView(); }),
@@ -1439,17 +1748,17 @@ const ACT = {
     if (paid < 0 || paid > total + 0.5) return toast('Amount paid can’t be more than the total.');
     if (paid < total - 0.5 && !c.customerId) return toast('Choose a customer for a credit sale, so the balance is tracked.');
     const id = uid();
-    const sale = {no: nextNo(), series: mySeries(), date: c.date || todayStr(), customerId: c.customerId || null, walkin: c.customerId ? '' : c.walkin.trim(), items, discount, paid: Math.min(paid, total), method: c.method, note: c.note.trim(), by: S.email, at: nowIso()};
+    const sale = {no: nextNo(), series: mySeries(), date: c.date || todayStr(), customerId: c.customerId || null, walkin: c.customerId ? '' : c.walkin.trim(), items, discount, paid: Math.min(paid, total), ...payData(c), note: c.note.trim(), by: S.email, at: nowIso()};
     UI.busy = true;
     const ok = await write([{col:'sales', id, data: sale, merge:false}], 'Sale recorded');
     UI.busy = false;
-    if (ok){ UI.cart = Object.assign(freshCart(), {method: c.method}); saveDraft(); renderView(); invoiceModal(id); }
+    if (ok){ UI.cart = Object.assign(freshCart(), {method: c.method, accountId: c.accountId}); saveDraft(); renderView(); invoiceModal(id); }
     else renderView();
   },
   addExpense: async () => {
     const e = UI.exp, a = num(e.amount);
     if (!(a > 0)) return toast('Enter the amount spent.');
-    if (await write([{col:'expenses', id:uid(), merge:false, data:{date: e.date || todayStr(), category: e.category, amount: a, method: e.method, note: e.note.trim(), by: S.email, at: nowIso()}}], 'Expense added')){ UI.exp = {date: e.date, category: e.category, amount:'', method: e.method, note:''}; renderView(); }
+    if (await write([{col:'expenses', id:uid(), merge:false, data:{date: e.date || todayStr(), category: e.category, amount: a, ...payData(e), note: e.note.trim(), by: S.email, at: nowIso()}}], 'Expense added')){ UI.exp = {date: e.date, category: e.category, amount:'', method: e.method, accountId: e.accountId, note:''}; renderView(); }
   },
   askExp: el => { UI.confirmExp = el.dataset.id; renderView(); },
   cancelExp: () => { UI.confirmExp = ''; renderView(); },

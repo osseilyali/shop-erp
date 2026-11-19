@@ -29,6 +29,10 @@ Stock, market purchases and imports (with landed cost), sales and invoices, cust
 6. **Hosting**: push this folder to a GitHub repository → Settings → Pages → deploy from the `main` branch, root folder. The app's address will be `https://<user>.github.io/<repo>/`.
 7. **Allow the address for Google sign-in**: Firebase → Authentication → Settings → Authorized domains → add `<user>.github.io`.
 
+## Money accounts
+
+Owners see **Money accounts**: the cash box, Orange Money, MTN MoMo, the bank, the home safe and US dollars, each with its balance and statement. Every sale, customer payment, expense and supplier payment says which account the money went into or came out of. Use **Transfer** to move money between accounts (buying dollars records the rate; fees count as expenses), **Owner money** for money the owner takes out or puts in (not an expense), and **Count cash** at closing (a difference is recorded and the balance set to the count). Staff choose the account when they sell but don't see this page or the home safe.
+
 ## Adding staff
 
 The owner opens **Team**, adds the person's email and an invoice letter (B, C, …), and sends them the app link. They sign in with Google, or create an account with that email and confirm the link that is emailed to them. Removing someone in Team cuts their access immediately; their past sales stay.
@@ -66,8 +70,12 @@ Every record is one Firestore document with `updatedAt` set by the server; delet
 | `customers`, `suppliers` | person or company | name, phone, … |
 | `purchases` | purchase or import | date, supplierId, kind, currency, rate, status, lines[], extras[], payments{} |
 | `adjustments` | stock correction | date, productId, qty (+/−), unitCost, reason |
-| `sales` | invoice | no, series, date, customerId, items[{productId, qty, price, cost}], discount, paid, method, void |
-| `payments` | customer payment | date, customerId, amount, method, void |
-| `expenses` | expense | date, category, amount, method, void |
+| `sales` | invoice | no, series, date, customerId, items[{productId, brand, sku, qty, price, cost}], discount, paid, accountId, method, void |
+| `payments` | customer payment | date, customerId, amount, accountId, method, void |
+| `expenses` | expense | date, category, amount, accountId, method, void |
+| `accounts` | place money is kept | name, type (cash, safe, mobile, bank), currency (GNF or USD), opening, openingDate, active |
+| `transfers` | money moved between accounts | date, from, to, amount, toAmount, rate, fee, void |
+| `equity` | owner money in or out | date, kind (in/out), accountId, amount, void |
+| `cashcounts` | end-of-day count | date, accountId, expected, counted, diff |
 
-Stock, average landed cost, customer and supplier balances and profit are calculated in the app from these records. Double-entry accounting can later be generated from the same records (each sale, purchase, payment and expense becomes a journal entry).
+Stock, average landed cost, customer and supplier balances, account balances and profit are calculated in the app from these records. An account's balance is its opening amount plus every movement dated on or after its start date; records made before accounts existed are matched to an account by their payment method. Transfer fees and cash-count differences are counted as expenses; owner money in or out is not. Double-entry accounting can later be generated from the same records (each sale, purchase, payment and expense becomes a journal entry).
