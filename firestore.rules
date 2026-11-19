@@ -1,0 +1,37 @@
+rules_version = '2';
+// Shop ERP security rules.
+// Paste this into Firebase console → Firestore Database → Rules, then Publish.
+// The owner emails below must match ownerEmails in config.js (lowercase).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email_verified == true;
+    }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function isOwner() { return signedIn() && myEmail() in ['osseilyali@gmail.com', 'mansour.s.samer@gmail.com']; }
+    function memberDoc() { return /databases/$(database)/documents/members/$(myEmail()); }
+    // The owner, or someone the owner added in Team who hasn't been removed.
+    function isMember() {
+      return isOwner() || (signedIn() && exists(memberDoc()) && get(memberDoc()).data.active == true);
+    }
+    // Every write must carry the server's time, so other devices can fetch only what changed.
+    function stamped() { return request.resource.data.updatedAt == request.time; }
+
+    // Team list: everyone on the team can read it, only the owner can change it.
+    match /members/{email} {
+      allow read: if isMember();
+      allow create, update: if isOwner() && stamped();
+      allow delete: if isOwner();
+    }
+
+    // Shop records: products, customers, suppliers, purchases, sales, payments, expenses, settings.
+    match /{coll}/{id} {
+      allow read: if coll != 'members' && isMember();
+      allow create, update: if coll != 'members' && isMember() && stamped();
+      allow delete: if coll != 'members' && isOwner();
+    }
+  }
+}

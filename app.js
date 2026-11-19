@@ -1,0 +1,1550 @@
+// Shop ERP: stock, purchases & imports, sales & customer credit, expenses, reports.
+// Data lives in the shop's own Firebase project (Cloud Firestore) and keeps working offline.
+'use strict';
+import * as F from './vendor/firebase.js';
+import { firebaseConfig, ownerEmails } from './config.js';
+const OWNERS = (Array.isArray(ownerEmails) ? ownerEmails : [ownerEmails]).map(e => String(e || '').trim().toLowerCase()).filter(Boolean);
+const ownerLetter = e => 'ABC'[OWNERS.indexOf(e)] || 'A';
+
+/* ================= constants ================= */
+const METHODS = ['Cash','Orange Money','MTN MoMo','Bank transfer','Cheque','Other'];
+const EXP_CATS = ['Rent','Salaries','Transport & fuel','Electricity & generator','Phone & internet','Taxes & fees','Repairs & maintenance','Meals','Other'];
+const UNITS = ['piece','box','carton','set','pair','meter','roll','bar','kg','liter'];
+const CURRENCIES = ['GNF','USD','EUR','CNY','AED'];
+const IMPORT_EXTRAS = ['Sea freight','Customs duties','Transit agent','Port & handling','Transport to shop'];
+const MARKET_EXTRAS = ['Transport','Loading & porters'];
+const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost','Own use','Other increase','Other decrease'];
+const DEFAULT_CATS = ['Appliances','Plumbing'];
+const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','shop','team'];
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses'];
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+const ICONS = {
+  home:'<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
+  cart:'<circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.6 12.2a1.5 1.5 0 0 0 1.5 1.2h8.6a1.5 1.5 0 0 0 1.5-1.1L21 8H6.2"/>',
+  receipt:'<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h4"/>',
+  box:'<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
+  truck:'<path d="M2 6h12v10H2z"/><path d="M14 10h4l3 3v3h-7"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
+  users:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6"/>',
+  store:'<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9h18v1.5a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0z"/><path d="M5 13v8h14v-8"/>',
+  wallet:'<path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7l12-4v4"/><circle cx="16.5" cy="13.5" r="1.3"/>',
+  chart:'<path d="M3 3v18h18"/><path d="M7 15v3M11 10v8M15 12v6M19 6v12"/>',
+  sliders:'<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  team:'<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="M19 8h3M20.5 6.5v3"/>',
+  dots:'<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+  x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
+  download:'<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
+  upload:'<path d="M12 21V9M7 14l5-5 5 5M4 3h16"/>',
+  printer:'<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>',
+  adjust:'<path d="M12 3v18M3 12h18"/><path d="M8 7l4-4 4 4M8 17l4 4 4-4"/>',
+  logout:'<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 16l-4-4 4-4M6 12h10"/>'
+};
+const ic = n => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]||''}</svg>`;
+
+/* ================= helpers ================= */
+const $ = (s, r=document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+const sum = (arr, f) => arr.reduce((a, x) => a + (f(x) || 0), 0);
+const r3 = x => Math.round(x * 1000) / 1000;
+function todayStr(){ const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function parseNum(v){
+  if (typeof v === 'number') return v;
+  let s = String(v ?? '').trim().replace(/[\s  ']/g, '').replace(/gnf$/i,'');
+  if (!s) return NaN;
+  const commas = (s.match(/,/g) || []).length, dots = (s.match(/\./g) || []).length;
+  if (commas && dots){
+    if (s.lastIndexOf(',') > s.lastIndexOf('.')) s = s.replace(/\./g, '').replace(',', '.');
+    else s = s.replace(/,/g, '');
+  } else if (commas === 1 && /,\d{1,2}$/.test(s)) s = s.replace(',', '.');
+  else s = s.replace(/,/g, '');
+  if ((s.match(/\./g) || []).length > 1) s = s.replace(/\./g, '');
+  const n = Number(s);
+  return isFinite(n) ? n : NaN;
+}
+const num = v => { const n = parseNum(v); return isNaN(n) ? 0 : n; };
+const nf0 = new Intl.NumberFormat('en-US', {maximumFractionDigits:0});
+const nf2 = new Intl.NumberFormat('en-US', {maximumFractionDigits:2});
+const money = n => nf0.format(Math.round(n || 0));
+const qtyFmt = n => nf2.format(r3(n || 0));
+function trimDec(s){ return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s; }
+function short(n){
+  const a = Math.abs(n || 0), sg = n < 0 ? '−' : '';
+  if (a >= 1e9) return sg + trimDec((a/1e9).toFixed(a >= 1e11 ? 0 : 2)) + 'B';
+  if (a >= 1e6) return sg + trimDec((a/1e6).toFixed(a >= 1e8 ? 0 : a >= 1e7 ? 1 : 2)) + 'M';
+  if (a >= 1e4) return sg + trimDec((a/1e3).toFixed(0)) + 'K';
+  return sg + nf0.format(a);
+}
+const pct = x => (isFinite(x) ? Math.round(x * 1000) / 10 : 0) + '%';
+function fdate(s){ if (!s) return ''; const [y,m,d] = s.split('-'); return `${+d} ${MON[+m-1]} ${y}`; }
+function fdateShort(s){ if (!s) return ''; const [,m,d] = s.split('-'); return `${+d} ${MON[+m-1]}`; }
+function mlabel(k){ const [y,m] = k.split('-'); return `${MON[+m-1]} ${y}`; }
+function addMonths(k, n){ let [y,m] = k.split('-').map(Number); m += n; while (m < 1){ m += 12; y--; } while (m > 12){ m -= 12; y++; } return `${y}-${String(m).padStart(2,'0')}`; }
+function timeOf(iso){ try { const d = new Date(iso); return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); } catch { return ''; } }
+function setPath(obj, path, val){ const ks = path.split('.'); let o = obj; for (let i = 0; i < ks.length - 1; i++){ o = o[ks[i]]; if (o == null) return; } o[ks[ks.length-1]] = val; }
+const opt = (v, label, sel) => `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(label)}</option>`;
+const opts = (list, cur) => list.map(v => opt(v, v, v === cur)).join('');
+const isPlainObj = v => v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
+function deepMerge(a, b){ const o = {...(a || {})}; for (const [k, v] of Object.entries(b || {})){ if (v === undefined) continue; o[k] = (isPlainObj(v) && isPlainObj(o[k])) ? deepMerge(o[k], v) : v; } return o; }
+const nowIso = () => new Date().toISOString();
+
+/* ================= state ================= */
+const RAW = Object.fromEntries(COLS.map(c => [c, new Map()]));
+const LIVE = {};
+const S = {
+  auth:'loading', user:null, email:'', isOwner:false, fs:null, authObj:null,
+  cacheLoaded:false, slow:false, online:navigator.onLine, unsynced:false, listenErr:'', installEvt:null,
+  settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}
+};
+const freshCart = () => ({items:[], customerId:'', walkin:'', discount:'', paid:'', paidTouched:false, method:'Cash', date:todayStr(), note:'', q:''});
+const UI = {
+  view:'home', busy:false,
+  cart: freshCart(),
+  stockQ:'', stockCat:'', stockLow:false, stockHidden:false,
+  salesQ:'', salesMonth: todayStr().slice(0,7),
+  purchQ:'', purchStatus:'',
+  custQ:'', supQ:'',
+  expMonth: todayStr().slice(0,7), exp:{date:todayStr(), category:'Rent', amount:'', method:'Cash', note:''}, confirmExp:'',
+  repPeriod:'m:' + todayStr().slice(0,7),
+  shop:null,
+  team:{email:'', name:'', code:''},
+  gate:{mode:'signin', email:'', password:'', err:'', note:'', busy:false},
+  importInfo:''
+};
+try { const d = JSON.parse(localStorage.getItem('erp-cart') || 'null'); if (d && Array.isArray(d.items)) UI.cart = Object.assign(freshCart(), d, {date: todayStr(), q:''}); } catch {}
+function saveDraft(){ try { localStorage.setItem('erp-cart', JSON.stringify(UI.cart)); } catch {} }
+
+function syncState(){
+  for (const c of COLS){
+    if (c === 'config') continue;
+    const o = {};
+    for (const [id, v] of RAW[c]) if (v && !v.deleted) o[id] = v;
+    S[c] = o;
+  }
+  S.settings = RAW.config.get('settings') || {};
+}
+
+/* ================= derived data ================= */
+let D = null;
+function purchaseCalc(p){
+  const rate = (p.currency && p.currency !== 'GNF') ? num(p.rate) : 1;
+  const lines = (p.lines || []).map(l => { const qty = num(l.qty), price = num(l.price); return {...l, qty, price, goods: qty * price * rate}; });
+  const goods = sum(lines, l => l.goods);
+  const extras = sum(p.extras || [], x => num(x.amount));
+  lines.forEach(l => { l.extra = goods > 0 ? extras * l.goods / goods : (lines.length ? extras / lines.length : 0); l.landed = l.goods + l.extra; l.unit = l.qty > 0 ? l.landed / l.qty : 0; });
+  const paid = sum(Object.values(p.payments || {}).filter(x => x && !x.void), x => num(x.amount));
+  return {rate, lines, goods, extras, landed: goods + extras, paid, balance: goods - paid};
+}
+function derive(){
+  const sales = [], expenses = [], payments = [];
+  for (const [id, s] of Object.entries(S.sales)){
+    if (!s || !Array.isArray(s.items) || !s.date) continue;
+    const items = s.items.map(i => ({productId:i.productId, name:i.name, qty:+i.qty || 0, price:+i.price || 0, cost:+i.cost || 0}));
+    const subtotal = sum(items, i => i.qty * i.price), discount = +s.discount || 0, total = subtotal - discount;
+    const paid = +s.paid || 0;
+    sales.push({...s, id, series: (s.series || 'A'), items, subtotal, discount, total, cogs: sum(items, i => i.qty * i.cost), paid, balance: total - paid, void: !!s.void});
+  }
+  for (const [id, e] of Object.entries(S.expenses)) if (e && e.amount != null && e.date) expenses.push({...e, id, amount: +e.amount || 0, void: !!e.void});
+  for (const [id, p] of Object.entries(S.payments)) if (p && p.amount != null && p.date) payments.push({...p, id, amount: +p.amount || 0, void: !!p.void});
+  const desc = (a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
+  sales.sort((a, b) => desc(a, b) || String(b.at || '').localeCompare(String(a.at || '')) || (b.no || 0) - (a.no || 0));
+  expenses.sort((a, b) => desc(a, b) || String(b.at || '').localeCompare(String(a.at || '')));
+  payments.sort((a, b) => desc(a, b) || String(b.at || '').localeCompare(String(a.at || '')));
+
+  const prod = {};
+  const P = id => prod[id] || (prod[id] = {stock:0, costQty:0, costSum:0, transit:0, moves:0, sold:0});
+  Object.keys(S.products).forEach(P);
+  const pc = {};
+  for (const [id, p] of Object.entries(S.purchases)){
+    const c = purchaseCalc(p); pc[id] = c;
+    for (const l of c.lines){
+      if (!l.productId) continue;
+      const x = P(l.productId); x.moves++;
+      if (p.status === 'received'){ x.stock += l.qty; x.costQty += l.qty; x.costSum += l.landed; } else x.transit += l.qty;
+    }
+  }
+  for (const a of Object.values(S.adjustments)){
+    if (!a.productId) continue;
+    const x = P(a.productId), q = +a.qty || 0;
+    x.stock += q; x.moves++;
+    if (q > 0 && +a.unitCost > 0){ x.costQty += q; x.costSum += q * (+a.unitCost); }
+  }
+  const maxNoBy = {};
+  for (const s of sales){
+    maxNoBy[s.series] = Math.max(maxNoBy[s.series] || 0, +s.no || 0);
+    if (s.void) continue;
+    for (const i of s.items){ if (!i.productId) continue; const x = P(i.productId); x.stock -= i.qty; x.sold += i.qty; x.moves++; }
+  }
+  let stockValue = 0;
+  for (const [id, x] of Object.entries(prod)){
+    x.stock = r3(x.stock);
+    x.avg = x.costQty > 0 ? x.costSum / x.costQty : (+(S.products[id] && S.products[id].cost) || 0);
+    if (x.stock > 0 && S.products[id]) stockValue += x.stock * x.avg;
+  }
+  let transitValue = 0, transitCount = 0;
+  for (const [id, p] of Object.entries(S.purchases)) if (p.status !== 'received'){ transitValue += pc[id].landed; transitCount++; }
+  const custBal = {};
+  for (const s of sales){ if (s.void || !s.customerId) continue; custBal[s.customerId] = (custBal[s.customerId] || 0) + s.balance; }
+  for (const p of payments){ if (p.void || !p.customerId) continue; custBal[p.customerId] = (custBal[p.customerId] || 0) - p.amount; }
+  // later payments settle the oldest unpaid invoices first
+  const invRemain = {}, pools = {};
+  for (const p of payments) if (!p.void && p.customerId) pools[p.customerId] = (pools[p.customerId] || 0) + p.amount;
+  const asc = sales.filter(s => !s.void && s.balance > 0.5).slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : String(a.at || '').localeCompare(String(b.at || '')));
+  for (const s of asc){
+    if (!s.customerId){ invRemain[s.id] = s.balance; continue; }
+    const pool = pools[s.customerId] || 0, take = Math.min(pool, s.balance);
+    pools[s.customerId] = pool - take; invRemain[s.id] = s.balance - take;
+  }
+  const supBal = {};
+  for (const [id, p] of Object.entries(S.purchases)){ if (!p.supplierId) continue; supBal[p.supplierId] = (supBal[p.supplierId] || 0) + pc[id].balance; }
+  D = {sales, expenses, payments, prod, pc, maxNoBy, stockValue, transitValue, transitCount, custBal, supBal, invRemain};
+}
+derive();
+
+function periodStats(pred){
+  const ss = D.sales.filter(s => !s.void && pred(s.date));
+  const revenue = sum(ss, s => s.total), cogs = sum(ss, s => s.cogs), gross = revenue - cogs;
+  const ex = D.expenses.filter(e => !e.void && pred(e.date)), expenses = sum(ex, e => e.amount);
+  const pays = D.payments.filter(p => !p.void && pred(p.date));
+  return {ss, ex, pays, count: ss.length, revenue, cogs, gross, expenses, net: gross - expenses, margin: revenue > 0 ? gross / revenue : 0, cashIn: sum(ss, s => s.paid) + sum(pays, p => p.amount)};
+}
+const shopName = () => (S.settings.shopName || '').trim() || 'Your shop';
+const initials = () => { const w = shopName().split(/\s+/).filter(Boolean); return ((w[0] || 'S')[0] + ((w[1] || '')[0] || '')).toUpperCase(); };
+const mySeries = () => ((S.members[S.email] || {}).code || (OWNERS.includes(S.email) ? ownerLetter(S.email) : 'A')).toUpperCase();
+function usedCodes(except){
+  const used = new Set(Object.entries(S.members).filter(([e, x]) => e !== except && x.active !== false).map(([, x]) => (x.code || '').toUpperCase()));
+  OWNERS.forEach(e => { if (e !== except && !S.members[e]) used.add(ownerLetter(e)); });
+  return used;
+}
+const invNo = (no, series) => `${(S.settings.prefix || 'F').trim() || 'F'}-${series || 'A'}-${String(no || 0).padStart(5, '0')}`;
+const invNoS = s => invNo(s.no, s.series);
+const nextNo = () => (D.maxNoBy[mySeries()] || 0) + 1;
+const custName = s => s.customerId ? ((S.customers[s.customerId] || {}).name || 'Removed customer') : (s.walkin || 'Walk-in customer');
+const prodName = id => (S.products[id] || {}).name || 'Removed product';
+const prodLabel = (id, p) => { p = p || S.products[id]; return p ? (p.sku ? `${p.name} · ${p.sku}` : p.name) : ''; };
+function staffName(e){
+  if (!e) return 'Unknown';
+  if (e === 'imported') return 'Claude version';
+  const m = S.members[e]; const n = (m && m.name) || String(e).split('@')[0];
+  return e === S.email ? `${n} (you)` : n;
+}
+function findProdByLabel(label){
+  const t = String(label || '').trim().toLowerCase(); if (!t) return '';
+  for (const [id, p] of Object.entries(S.products)) if (prodLabel(id, p).toLowerCase() === t) return id;
+  const byName = Object.entries(S.products).filter(([, p]) => (p.name || '').toLowerCase() === t);
+  return byName.length === 1 ? byName[0][0] : '';
+}
+const qtyU = (q, unit) => `${qtyFmt(q)} ${esc(unit && unit !== 'piece' ? unit : 'pcs')}`;
+function allCats(){ const s = new Set(DEFAULT_CATS); Object.values(S.products).forEach(p => { if (p.category) s.add(p.category); }); return [...s]; }
+function isLow(id){ const p = S.products[id], x = D.prod[id]; if (!p || !x || p.active === false) return false; const min = +p.min || 0; return min > 0 ? x.stock <= min : (x.moves > 0 && x.stock <= 0); }
+const sortedBy = (obj, key = 'name') => Object.entries(obj).sort((a, b) => String(a[1][key] || '').localeCompare(String(b[1][key] || '')));
+const loading = () => !S.cacheLoaded;
+function emptyBox(title, text, action = ''){
+  if (loading()) return `<div class="empty"><span>Loading your data…</span></div>`;
+  return `<div class="empty"><strong>${esc(title)}</strong><span>${esc(text)}</span>${action}</div>`;
+}
+
+/* ================= database writes ================= */
+function errText(e){
+  const c = e && e.code;
+  if (c === 'permission-denied') return 'This change was refused. Ask the owner to check your access in Team.';
+  if (c === 'resource-exhausted') return 'The free daily limit on Firebase was reached, so this change wasn’t saved. Try again tomorrow.';
+  if (c === 'unauthenticated') return 'You were signed out. Sign in again to save changes.';
+  if (c === 'invalid-argument') return 'This record couldn’t be saved because it’s too large or badly formed.';
+  return 'Couldn’t save this change. Check the connection and try again.';
+}
+function localApply(col, id, data, merge){ const cur = RAW[col].get(id); RAW[col].set(id, merge ? deepMerge(cur, data) : {...data}); }
+async function revert(col, id){
+  try { const s = await F.getDocFromCache(F.doc(S.fs, col, id)); if (s.exists()) RAW[col].set(id, s.data({serverTimestamps:'estimate'})); else RAW[col].delete(id); }
+  catch { RAW[col].delete(id); }
+  schedule();
+}
+// ops: [{col, id, data, merge}] — written together; shown at once, uploaded when online.
+async function write(ops, okMsg){
+  if (!S.fs){ toast('Not connected to the database. Reload the page.'); return false; }
+  try {
+    for (let i = 0; i < ops.length; i += 400){
+      const chunk = ops.slice(i, i + 400);
+      const b = F.writeBatch(S.fs);
+      for (const o of chunk){
+        const merge = o.merge !== false;
+        b.set(F.doc(S.fs, o.col, o.id), {...o.data, updatedAt: F.serverTimestamp()}, {merge});
+        localApply(o.col, o.id, {...o.data, updatedAt: null}, merge);
+      }
+      b.commit().catch(e => { toast(errText(e)); chunk.forEach(o => revert(o.col, o.id)); });
+    }
+  } catch (e){ console.error(e); toast(errText(e)); return false; }
+  trackPending(); schedule();
+  if (okMsg) toast(S.online ? okMsg : `${okMsg}. Saved on this device; it uploads when the internet is back.`);
+  return true;
+}
+let pendSeq = 0;
+function trackPending(){
+  if (!S.fs) return;
+  const my = ++pendSeq; S.unsynced = true; schedule();
+  F.waitForPendingWrites(S.fs).then(() => { if (my === pendSeq){ S.unsynced = false; schedule(); } }).catch(() => {});
+}
+
+/* ================= sync from Firestore ================= */
+let syncStarted = false;
+const tsMs = v => v && typeof v.toMillis === 'function' ? v.toMillis() : 0;
+async function startSync(){
+  if (syncStarted) return; syncStarted = true;
+  // 1. Show what this device already has, instantly and at no cost.
+  await Promise.all(COLS.map(async c => {
+    try { const snap = await F.getDocsFromCache(F.collection(S.fs, c)); snap.forEach(d => RAW[c].set(d.id, d.data({serverTimestamps:'estimate'}))); } catch {}
+  }));
+  S.cacheLoaded = true; schedule();
+  // 2. Then ask the server only for what changed since (keeps us inside the free daily quota).
+  for (const c of COLS) listen(c);
+  trackPending();
+  setTimeout(() => { S.slow = true; schedule(); }, 10000);
+}
+function listen(c){
+  let m = 0; for (const v of RAW[c].values()) m = Math.max(m, tsMs(v && v.updatedAt));
+  const cutoff = F.Timestamp.fromMillis(m ? Math.max(0, m - 15 * 60 * 1000) : 0);
+  F.onSnapshot(F.query(F.collection(S.fs, c), F.where('updatedAt', '>=', cutoff)), {includeMetadataChanges: true}, snap => {
+    for (const ch of snap.docChanges()){
+      if (ch.type === 'removed'){
+        // A doc with an edit still waiting to upload drops out of this query locally; keep this device's copy.
+        F.getDocFromCache(ch.doc.ref).then(d => { if (d.exists()) RAW[c].set(d.id, d.data({serverTimestamps:'estimate'})); else RAW[c].delete(ch.doc.id); schedule(); }).catch(() => {});
+      } else RAW[c].set(ch.doc.id, ch.doc.data({serverTimestamps:'estimate'}));
+    }
+    LIVE[c] = !snap.metadata.fromCache;
+    schedule();
+  }, err => {
+    console.error(c, err);
+    if (err && err.code === 'permission-denied') S.auth = S.isOwner ? 'rules' : 'denied';
+    else S.listenErr = (err && err.code) || 'error';
+    schedule();
+  });
+}
+let ownerBooted = false;
+function afterSync(){
+  if (S.auth !== 'ready' || !S.isOwner || ownerBooted || !LIVE.members) return;
+  ownerBooted = true;
+  if (!RAW.members.get(S.email)) write([{col:'members', id:S.email, data:{email:S.email, name:'', code: ownerLetter(S.email), role:'owner', active:true, addedAt: nowIso()}}]);
+}
+
+/* ================= toast ================= */
+let toastT = 0;
+function toast(msg){ const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3600); }
+
+/* ================= sign-in screens ================= */
+function authErr(e){
+  const c = e && e.code;
+  const m = {
+    'auth/invalid-credential':'Wrong email or password.', 'auth/wrong-password':'Wrong email or password.', 'auth/user-not-found':'No account with this email. Choose “Create account”.',
+    'auth/email-already-in-use':'An account with this email already exists. Choose “Sign in”.', 'auth/weak-password':'Use a password of at least 6 characters.',
+    'auth/invalid-email':'That email address isn’t valid.', 'auth/too-many-requests':'Too many attempts. Wait a few minutes and try again.',
+    'auth/network-request-failed':'No internet connection. Signing in needs the internet once; after that the app works offline.',
+    'auth/popup-blocked':'The browser blocked the Google window. Allow pop-ups for this site and try again.', 'auth/popup-closed-by-user':'The Google window was closed before signing in.',
+    'auth/cancelled-popup-request':'The Google window was closed before signing in.',
+    'auth/unauthorized-domain':'This web address isn’t allowed yet. In Firebase, open Authentication → Settings → Authorized domains and add it.',
+    'auth/operation-not-allowed':'This sign-in method is turned off. In Firebase, open Authentication → Sign-in method and enable it.'
+  };
+  return m[c] || 'Couldn’t sign in. Try again.';
+}
+const gateBrand = () => `<div class="brand"><span class="brand-mark">${esc(S.settings.shopName ? initials() : 'ERP')}</span><span><span class="brand-name">${esc(S.settings.shopName || 'Shop ERP')}</span><br><span class="brand-sub">Appliances · Plumbing</span></span></div>`;
+function renderGate(){
+  const g = UI.gate, el = $('#gate');
+  let h = '';
+  if (S.auth === 'setup'){
+    h = `${gateBrand()}<h1>Connect the database</h1><p>This copy of the app doesn’t have its Firebase settings yet.</p>
+      <ol><li>Open <code>config.js</code>.</li><li>Paste the <code>firebaseConfig</code> from Firebase console → Project settings → Your apps.</li><li>Put the owners’ emails in <code>ownerEmails</code>, then publish again.</li></ol>`;
+  } else if (S.auth === 'loading'){
+    h = `${gateBrand()}<p>Loading…</p>`;
+  } else if (S.auth === 'signedOut'){
+    const up = g.mode === 'signup';
+    h = `${gateBrand()}<h1>${up ? 'Create your account' : 'Sign in'}</h1>
+      <button type="button" class="btn big gbtn" data-act="google"${g.busy ? ' disabled' : ''}>Continue with Google</button>
+      <div class="or">or use email</div>
+      <form class="stack" id="gate-form" novalidate>
+        <div class="field"><label for="g-email">Email</label><input id="g-email" class="inp" type="email" autocomplete="email" value="${esc(g.email)}" data-bind="gate.email"></div>
+        <div class="field"><label for="g-pass">Password</label><input id="g-pass" class="inp" type="password" autocomplete="${up ? 'new-password' : 'current-password'}" value="${esc(g.password)}" data-bind="gate.password">${up ? '<span class="hint">At least 6 characters</span>' : ''}</div>
+        ${g.err ? `<p class="errline">${esc(g.err)}</p>` : ''}${g.note ? `<p class="sub">${esc(g.note)}</p>` : ''}
+        <button type="submit" class="btn primary big"${g.busy ? ' disabled' : ''}>${g.busy ? 'Please wait…' : up ? 'Create account' : 'Sign in'}</button>
+      </form>
+      <div class="inline" style="justify-content:space-between">${up ? `<button type="button" class="linkbtn" data-act="gateMode" data-v="signin">I already have an account</button>` : `<button type="button" class="linkbtn" data-act="gateMode" data-v="signup">Create account</button><button type="button" class="linkbtn" data-act="resetPw">Forgot password?</button>`}</div>
+      <p class="hint">Only people the owner has added to the team can open the shop’s records.</p>`;
+  } else if (S.auth === 'unverified'){
+    h = `${gateBrand()}<h1>Confirm your email</h1><p>We sent a link to <b>${esc(S.email)}</b>. Open it, then come back and tap Continue. Check the spam folder if you don’t see it.</p>
+      ${g.err ? `<p class="errline">${esc(g.err)}</p>` : ''}${g.note ? `<p class="sub">${esc(g.note)}</p>` : ''}
+      <button type="button" class="btn primary big" data-act="verified">Continue</button>
+      <div class="inline" style="justify-content:space-between"><button type="button" class="linkbtn" data-act="resendVerify">Send the link again</button><button type="button" class="linkbtn" data-act="signOut">Use another account</button></div>`;
+  } else if (S.auth === 'denied'){
+    h = `${gateBrand()}<h1>Not on the team yet</h1><p><b>${esc(S.email)}</b> doesn’t have access to this shop. Ask the owner to add this email in <b>Team</b>, then tap Try again.</p>
+      <button type="button" class="btn primary big" data-act="reload">Try again</button>
+      <button type="button" class="linkbtn" data-act="signOut">Sign in with another account</button>`;
+  } else if (S.auth === 'rules'){
+    h = `${gateBrand()}<h1>Publish the security rules</h1><p>You’re signed in as the owner, but the database refused access. That usually means the rules aren’t published yet.</p>
+      <ol><li>In Firebase, open <b>Firestore Database → Rules</b>.</li><li>Paste the contents of <code>firestore.rules</code>, with <code>${esc(OWNERS.join(', '))}</code> as the owner email${OWNERS.length > 1 ? 's' : ''}.</li><li>Tap <b>Publish</b>, then Try again.</li></ol>
+      <button type="button" class="btn primary big" data-act="reload">Try again</button>
+      <button type="button" class="linkbtn" data-act="signOut">Sign out</button>`;
+  }
+  withFocus(el, () => { el.innerHTML = `<div class="gate-card">${h}</div>`; });
+}
+async function googleSignIn(){
+  UI.gate.err = ''; UI.gate.busy = true; renderGate();
+  try { await F.signInWithPopup(S.authObj, new F.GoogleAuthProvider()); }
+  catch (e){ UI.gate.err = authErr(e); }
+  UI.gate.busy = false; renderGate();
+}
+async function emailSubmit(){
+  const g = UI.gate; g.err = ''; g.note = '';
+  const email = g.email.trim();
+  if (!email || !g.password){ g.err = 'Enter your email and password.'; renderGate(); return; }
+  g.busy = true; renderGate();
+  try {
+    if (g.mode === 'signup'){
+      const cred = await F.createUserWithEmailAndPassword(S.authObj, email, g.password);
+      try { await F.sendEmailVerification(cred.user); } catch {}
+    } else await F.signInWithEmailAndPassword(S.authObj, email, g.password);
+    g.password = '';
+  } catch (e){ g.err = authErr(e); }
+  g.busy = false; renderGate();
+}
+
+/* ================= render shell ================= */
+const NAV = () => [
+  {group:'Daily', items:[['home','Dashboard','home'], ['sell','New sale','cart'], ['sales','Sales & invoices','receipt'], ['expenses','Expenses','wallet']]},
+  {group:'Goods', items:[['stock','Stock','box'], ['purchases','Purchases & imports','truck'], ['suppliers','Suppliers','store']]},
+  {group:'Money', items:[['customers','Customers & credit','users'], ['reports','Reports','chart']]}
+];
+function syncInfo(){
+  if (!S.online) return ['warn', S.unsynced ? 'Offline · changes saved on this device' : 'Offline · working from this device'];
+  if (S.listenErr) return ['bad', 'Connection problem. Reload the page'];
+  if (S.unsynced) return ['warn', 'Uploading changes…'];
+  if (COLS.every(c => LIVE[c])) return ['live', 'Online · all changes saved'];
+  return S.slow ? ['warn', 'Can’t reach the server yet'] : ['', 'Connecting…'];
+}
+function renderRail(){
+  const low = Object.keys(S.products).filter(isLow).length;
+  const [cls, txt] = syncInfo();
+  $('#rail').innerHTML = `
+    <a class="brand" href="#home"><span class="brand-mark">${esc(initials())}</span><span><span class="brand-name">${esc(shopName())}</span><br><span class="brand-sub">Appliances · Plumbing</span></span></a>
+    ${NAV().map(g => `<div class="navgroup"><div class="navlabel">${g.group}</div>${g.items.map(([r, l, i]) => `<a class="navlink" href="#${r}"${UI.view === r ? ' aria-current="page"' : ''}>${ic(i)}<span>${l}</span>${r === 'stock' && low ? `<span class="badge" title="Low stock">${low}</span>` : ''}</a>`).join('')}</div>`).join('')}
+    <div class="rail-foot">
+      ${S.isOwner ? `<a class="navlink" href="#team"${UI.view === 'team' ? ' aria-current="page"' : ''}>${ic('team')}<span>Team</span></a>` : ''}
+      <a class="navlink" href="#shop"${UI.view === 'shop' ? ' aria-current="page"' : ''}>${ic('sliders')}<span>Shop settings</span></a>
+      <div class="sync"><span class="dot ${cls}"></span><span>${txt}</span></div>
+      <div class="who">${esc(S.email)} · invoices ${esc(mySeries())}</div>
+    </div>`;
+}
+function renderTabbar(){
+  const more = ['sales','customers','suppliers','expenses','reports','shop','team'].includes(UI.view);
+  const t = (r, l, i, cls = '') => `<a class="tab ${cls}" href="#${r}"${UI.view === r ? ' aria-current="page"' : ''}><span class="ti">${ic(i)}</span>${l}</a>`;
+  $('#tabbar').innerHTML = t('home','Home','home') + t('stock','Stock','box') + t('sell','Sell','cart','sell') + t('purchases','Buy','truck') +
+    `<button class="tab" type="button" data-act="more"${more ? ' aria-current="page"' : ''}><span class="ti">${ic('dots')}</span>More</button>`;
+}
+let RESTORING = false;
+function withFocus(container, fn){
+  const a = document.activeElement; let id = null, s = null, e = null;
+  if (a && a.id && container.contains(a)){ id = a.id; try { s = a.selectionStart; e = a.selectionEnd; } catch {} }
+  fn();
+  if (id){ const n = document.getElementById(id); if (n && n !== document.activeElement){ RESTORING = true; try { n.focus({preventScroll:true}); if (s != null) n.setSelectionRange(s, e); } catch {} RESTORING = false; } }
+}
+function banners(){
+  let h = '';
+  if (!S.online) h += `<div class="banner info"><div><b>You’re offline.</b><span class="sub">Keep working. Sales, payments and expenses are saved on this device and upload on their own when the internet is back.</span></div></div>`;
+  else if (S.listenErr) h += `<div class="banner"><div><b>The connection to the database stopped.</b><span class="sub">Reload the page to reconnect. Nothing saved on this device is lost.</span></div></div>`;
+  return h;
+}
+function mobileTop(){
+  const [cls, txt] = syncInfo();
+  return `<div class="mtop"><span class="brand-mark">${esc(initials())}</span><span class="brand-name">${esc(shopName())}</span><span class="dot ${cls}" title="${esc(txt)}"></span></div>`;
+}
+const VIEWS = {};
+function renderView(){
+  const v = $('#view');
+  if (UI.view === 'team' && !S.isOwner) UI.view = 'home';
+  withFocus(v, () => { v.innerHTML = mobileTop() + banners() + (VIEWS[UI.view] || VIEWS.home)(); });
+}
+function renderAll(){
+  const ready = S.auth === 'ready';
+  $('#gate').hidden = ready; $('#app').hidden = !ready; $('#tabbar').hidden = !ready;
+  if (!ready){ renderGate(); return; }
+  renderRail(); renderTabbar(); renderView();
+}
+let raf = 0;
+function schedule(){
+  if (raf) return;
+  raf = requestAnimationFrame(() => {
+    raf = 0; syncState(); derive(); renderAll();
+    if (S.auth === 'ready') MODALS.forEach(m => { if (m.live) m.render(); });
+    afterSync();
+  });
+}
+const header = (eyebrow, title, actions = '') => `<header class="vh"><div><p class="eyebrow">${eyebrow}</p><h1>${esc(title)}</h1></div>${actions ? `<div class="actions">${actions}</div>` : ''}</header>`;
+const tileRaw = (k, vHtml, s, href, cls = '', title = '') => `<${href ? `a href="${href}"` : 'div'} class="tile ${cls}"><span class="k">${k}</span><span class="v"${title ? ` title="${title}"` : ''}>${vHtml}</span><span class="s">${s}</span></${href ? 'a' : 'div'}>`;
+const tile = (k, v, s, href, cls = '') => tileRaw(k, `${short(v)}<small>GNF</small>`, s, href, cls, `${money(v)} GNF`);
+
+/* ================= views ================= */
+VIEWS.home = function(){
+  const t = todayStr(), m = t.slice(0, 7);
+  const day = periodStats(d => d === t), mon = periodStats(d => d.slice(0, 7) === m);
+  const debts = Object.entries(D.custBal).filter(([id, b]) => b > 0.5 && S.customers[id]);
+  const owed = sum(debts, ([, b]) => b);
+  const weOwe = sum(Object.values(D.supBal), b => Math.max(0, b));
+  const nProd = Object.values(S.products).filter(p => p.active !== false).length;
+  const nPurch = Object.keys(S.purchases).length, nAdj = Object.keys(S.adjustments).length;
+  const steps = [
+    {done: !!(S.settings.shopName || '').trim(), t:'Name your shop', s:'Shown on every invoice', act:'href="#shop"'},
+    {done: nProd > 0, t:'Add your products', s:'With the quantity you have now', act:'data-act="newProduct"'},
+    {done: nPurch > 0 || nAdj > 0, t:'Record a purchase', s:'From the market or an import', act:'href="#purchases"'},
+    {done: D.sales.length > 0, t:'Record your first sale', s:'Cash or on credit', act:'href="#sell"'}
+  ];
+  const showSteps = !loading() && steps.some(s => !s.done);
+  const low = Object.keys(S.products).filter(isLow).sort((a, b) => (D.prod[a].stock - D.prod[b].stock));
+  const recent = D.sales.slice(0, 8);
+  const transit = Object.entries(S.purchases).filter(([, p]) => p.status !== 'received').sort((a, b) => String(a[1].date).localeCompare(String(b[1].date)));
+  return header(`Dashboard · ${fdate(t)}`, shopName(), `<a class="btn" href="#purchases">${ic('truck')}Purchase</a><a class="btn primary" href="#sell">${ic('plus')}New sale</a>`) +
+  (showSteps ? `<section class="panel"><div class="panel-h"><h2>Getting started</h2><span class="sub">${steps.filter(s => s.done).length} of 4 done</span></div><div class="panel-b"><div class="steps">${steps.map((s, i) => `<${s.act.startsWith('href') ? 'a' : 'button type="button"'} class="step ${s.done ? 'done' : ''}" ${s.act}><span class="sn">${s.done ? 'DONE' : 'STEP ' + (i + 1)}</span><b>${s.t}</b><span class="sub">${s.s}</span></${s.act.startsWith('href') ? 'a' : 'button'}>`).join('')}</div></div></section>` : '') +
+  `<section class="tiles">
+    ${tile('Sales today', day.revenue, `${day.count} invoice${day.count === 1 ? '' : 's'} · ${short(day.cashIn)} cash in`, '#sales', 'hl')}
+    ${tile('Sales this month', mon.revenue, `${mon.count} invoice${mon.count === 1 ? '' : 's'} in ${MON[+m.slice(5) - 1]}`, '#reports')}
+    ${tile('Gross profit this month', mon.gross, `${pct(mon.margin)} margin on sales`, '#reports')}
+    ${tile('Net profit this month', mon.net, `after ${short(mon.expenses)} of expenses`, '#reports', mon.net < 0 ? 'neg' : '')}
+    ${tile('Customers owe you', owed, `${debts.length} customer${debts.length === 1 ? '' : 's'} on credit`, '#customers')}
+    ${tile('You owe suppliers', weOwe, 'unpaid purchases', '#suppliers')}
+    ${tile('Stock value at cost', D.stockValue, `${nProd} product${nProd === 1 ? '' : 's'} in the list`, '#stock')}
+    ${tile('Imports in transit', D.transitValue, `${D.transitCount} shipment${D.transitCount === 1 ? '' : 's'} not yet received`, '#purchases')}
+  </section>
+  <div class="grid2">
+    <section class="panel"><div class="panel-h"><h2>Recent sales</h2><a class="btn sm" href="#sales">All sales</a></div>
+      ${recent.length ? `<div class="list">${recent.map(s => saleLi(s)).join('')}</div>` : emptyBox('No sales yet', 'Sales you record show up here.', `<a class="btn primary sm" href="#sell">${ic('plus')}New sale</a>`)}
+    </section>
+    <div class="stack">
+      <section class="panel"><div class="panel-h"><h2>Low stock</h2>${low.length ? `<span class="pill warn">${low.length} to reorder</span>` : ''}</div>
+        ${low.length ? `<div class="list">${low.slice(0, 8).map(id => { const p = S.products[id], x = D.prod[id]; return `<button type="button" class="li" data-act="openProduct" data-id="${id}"><span class="nm"><b>${esc(p.name)}</b><span class="sub">${esc(p.category || '')}${+p.min ? ` · reorder at ${qtyFmt(p.min)}` : ''}${x.transit ? ` · ${qtyFmt(x.transit)} on the way` : ''}</span></span><span class="amt"><span class="pill ${x.stock <= 0 ? 'bad' : 'warn'}">${qtyU(x.stock, p.unit)}</span></span></button>`; }).join('')}</div>` : emptyBox('Nothing running low', 'Set a reorder level on a product to get warned here.')}
+      </section>
+      ${transit.length ? `<section class="panel"><div class="panel-h"><h2>Imports on the way</h2></div><div class="list">${transit.slice(0, 6).map(([id, p]) => `<button type="button" class="li" data-act="openPurchase" data-id="${id}"><span class="nm"><b>${esc(p.ref || 'Import')}</b><span class="sub">${esc((S.suppliers[p.supplierId] || {}).name || 'No supplier')} · ordered ${fdate(p.date)}</span></span><span class="amt">${money(D.pc[id].landed)}<br><span class="sub">GNF landed</span></span></button>`).join('')}</div></section>` : ''}
+    </div>
+  </div>`;
+};
+function salePill(s){
+  if (s.void) return '<span class="pill bad">Void</span>';
+  const rem = D.invRemain[s.id] || 0;
+  if (rem <= 0.5) return '<span class="pill good">Paid</span>';
+  if (rem < s.total - 0.5) return `<span class="pill warn">${short(rem)} left</span>`;
+  return `<span class="pill bad">Unpaid</span>`;
+}
+function saleLi(s){
+  return `<button type="button" class="li" data-act="openSale" data-id="${s.id}"><span class="nm"><b>${esc(custName(s))}</b><span class="sub"><span class="mono">${invNoS(s)}</span> · ${fdateShort(s.date)} · ${s.items.length} item${s.items.length === 1 ? '' : 's'}</span></span><span class="amt">${money(s.total)}<br>${salePill(s)}</span></button>`;
+}
+
+VIEWS.sell = function(){
+  const c = UI.cart;
+  const toks = c.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const all = Object.entries(S.products).filter(([, p]) => p.active !== false);
+  const list = all.filter(([, p]) => { const h = `${p.name} ${p.sku || ''} ${p.brand || ''} ${p.category || ''}`.toLowerCase(); return toks.every(t => h.includes(t)); }).sort((a, b) => String(a[1].name).localeCompare(String(b[1].name)));
+  const shown = list.slice(0, 40);
+  const subtotal = sum(c.items, i => num(i.qty) * num(i.price));
+  const discount = num(c.discount), total = subtotal - discount;
+  const paid = c.paidTouched ? num(c.paid) : total;
+  const credit = total - paid;
+  const cust = c.customerId ? S.customers[c.customerId] : null;
+  const custOwes = c.customerId ? (D.custBal[c.customerId] || 0) : 0;
+  const custs = sortedBy(S.customers);
+
+  const picker = `<section class="panel">
+    <div class="panel-h"><div class="search">${ic('search')}<input id="sell-q" class="inp" type="search" placeholder="Search by name, code or brand" value="${esc(c.q)}" data-bind="cart.q" data-rr autocomplete="off" aria-label="Search products"></div><button type="button" class="btn sm" data-act="newProduct">${ic('plus')}Product</button></div>
+    ${shown.length ? `<div class="list">${shown.map(([id, p]) => { const x = D.prod[id] || {stock:0}; const inCart = c.items.find(i => i.productId === id); return `<button type="button" class="li pitem" data-act="cartAdd" data-id="${id}"><span class="nm"><b>${esc(p.name)}</b><span class="sub">${esc([p.sku, p.brand, p.category].filter(Boolean).join(' · ')) || '&nbsp;'}</span></span>${inCart ? `<span class="pill accent">× ${esc(inCart.qty)}</span>` : ''}<span class="pst ${x.stock <= 0 ? 'neg' : ''}">${qtyU(x.stock, p.unit)}</span><span class="pp">${money(p.price)}</span></button>`; }).join('')}</div>${list.length > 40 ? `<p class="sub" style="padding:10px 14px">Showing 40 of ${list.length}. Keep typing to narrow the list.</p>` : ''}`
+      : (all.length ? `<div class="empty"><strong>No match</strong><span>Nothing matches “${esc(c.q)}”.</span></div>` : emptyBox('No products yet', 'Add the items you sell, with the quantity you have now.', `<button type="button" class="btn primary sm" data-act="newProduct">${ic('plus')}Add product</button>`))}
+  </section>`;
+
+  const lines = c.items.map((it, i) => {
+    const p = S.products[it.productId] || {name: it.name || 'Removed product'}; const x = D.prod[it.productId] || {stock:0, avg:0};
+    const qn = num(it.qty), pn = num(it.price);
+    const short1 = qn > x.stock, below = pn > 0 && x.avg > 0 && pn < x.avg;
+    return `<div class="cline">
+      <div class="cl-top"><div class="nm"><b>${esc(p.name)}</b><span class="sub">${qtyU(x.stock, p.unit)} in stock${x.avg ? ` · cost ${money(x.avg)}` : ''}</span></div><button type="button" class="btn ghost sm iconbtn" data-act="cartRemove" data-i="${i}" aria-label="Remove ${esc(p.name)}">${ic('x')}</button></div>
+      <div class="cl-bot"><input id="cq-${i}" class="inp n qty" inputmode="decimal" value="${esc(it.qty)}" data-bind="cart.items.${i}.qty" data-rr data-sa aria-label="Quantity"><span class="x">×</span><input id="cp-${i}" class="inp n pr" inputmode="decimal" value="${esc(it.price)}" data-bind="cart.items.${i}.price" data-rr data-sa aria-label="Unit price in GNF" placeholder="Price"><span class="cl-total">${money(qn * pn)}</span></div>
+      ${short1 ? `<p class="warnline">Only ${qtyU(x.stock, p.unit)} recorded in stock.</p>` : ''}${below ? `<p class="warnline">Below average cost of ${money(x.avg)} GNF.</p>` : ''}
+    </div>`;
+  }).join('');
+
+  const cart = `<section class="panel cart">
+    <div class="panel-h"><h2>Invoice <span class="mono muted">${invNo(nextNo(), mySeries())}</span></h2>${c.items.length ? `<button type="button" class="btn ghost sm" data-act="cartClear">Clear</button>` : ''}</div>
+    <div class="panel-b stack">
+      ${c.items.length ? `<div>${lines}</div>` : `<div class="empty" style="padding:18px 8px"><span>Tap a product to add it.</span></div>`}
+      <div class="form">
+        <div class="field"><label for="sell-cust">Customer</label><select id="sell-cust" class="inp" data-bind="cart.customerId" data-rr>${opt('', 'Walk-in customer', !c.customerId)}${custs.map(([id, k]) => opt(id, k.name, id === c.customerId)).join('')}</select>
+          <span class="inline"><button type="button" class="btn ghost sm" data-act="newCustomerForSale">${ic('plus')}New customer</button>${custOwes > 0.5 ? `<span class="pill warn">Already owes ${short(custOwes)}</span>` : ''}</span></div>
+        ${c.customerId ? '' : `<div class="field"><label for="sell-walkin">Name on invoice <span class="hint">(optional)</span></label><input id="sell-walkin" class="inp" value="${esc(c.walkin)}" data-bind="cart.walkin" autocomplete="off"></div>`}
+        <div class="field"><label for="sell-date">Date</label><input id="sell-date" class="inp" type="date" value="${esc(c.date)}" data-bind="cart.date"></div>
+        <div class="field"><label for="sell-disc">Discount (GNF)</label><input id="sell-disc" class="inp n" inputmode="decimal" value="${esc(c.discount)}" data-bind="cart.discount" data-rr data-sa placeholder="0"></div>
+      </div>
+      <div class="totals">
+        <div class="row"><span class="muted">Subtotal</span><span>${money(subtotal)}</span></div>
+        ${discount ? `<div class="row"><span class="muted">Discount</span><span>−${money(discount)}</span></div>` : ''}
+        <div class="row grand"><span>Total</span><span>${money(total)} <small class="sub">GNF</small></span></div>
+      </div>
+      <div class="form">
+        <div class="field"><label for="sell-paid">Amount paid now</label><input id="sell-paid" class="inp n" inputmode="decimal" value="${esc(c.paidTouched ? c.paid : (total ? String(Math.round(total)) : ''))}" data-in="paid" data-sa>
+          <span class="inline"><button type="button" class="btn ghost sm" data-act="paidFull">Paid in full</button><button type="button" class="btn ghost sm" data-act="paidCredit">All on credit</button></span></div>
+        <div class="field"><label for="sell-method">Paid by</label><select id="sell-method" class="inp" data-bind="cart.method">${opts(METHODS, c.method)}</select></div>
+      </div>
+      ${credit > 0.5 ? `<div class="banner" style="padding:9px 12px"><div><b>${money(credit)} GNF on credit</b><span class="sub">${cust ? `Added to what ${esc(cust.name)} owes.` : 'Choose a customer so the balance is tracked.'}</span></div></div>` : ''}
+      ${credit < -0.5 ? `<p class="errline">Amount paid is more than the total.</p>` : ''}
+      <div class="field"><label for="sell-note">Note <span class="hint">(optional)</span></label><input id="sell-note" class="inp" value="${esc(c.note)}" data-bind="cart.note" placeholder="Delivery, warranty, serial number…"></div>
+      <button type="button" class="btn primary big" data-act="recordSale"${UI.busy || !c.items.length ? ' disabled' : ''}>${UI.busy ? 'Saving…' : `Record sale · ${money(total)} GNF`}</button>
+    </div>
+  </section>`;
+  return header('Point of sale', 'New sale') + `<div class="pos">${picker}${cart}</div>`;
+};
+
+VIEWS.sales = function(){
+  const months = [...new Set([todayStr().slice(0, 7), ...D.sales.map(s => s.date.slice(0, 7))])].sort().reverse();
+  const q = UI.salesQ.trim().toLowerCase();
+  const list = D.sales.filter(s => (UI.salesMonth === 'all' || s.date.slice(0, 7) === UI.salesMonth) && (!q || `${invNoS(s)} ${custName(s)} ${s.items.map(i => i.name).join(' ')}`.toLowerCase().includes(q)));
+  const live = list.filter(s => !s.void);
+  const total = sum(live, s => s.total), atSale = sum(live, s => s.paid), left = sum(live, s => D.invRemain[s.id] || 0);
+  return header('Sales & invoices', 'Sales', `<a class="btn primary" href="#sell">${ic('plus')}New sale</a>`) +
+  `<div class="toolbar"><div class="search">${ic('search')}<input id="sales-q" class="inp" type="search" placeholder="Invoice no., customer or product" value="${esc(UI.salesQ)}" data-bind="salesQ" data-rr aria-label="Search sales"></div>
+   <select id="sales-m" class="inp" data-bind="salesMonth" data-rr aria-label="Month">${opt('all', 'All months', UI.salesMonth === 'all')}${months.map(k => opt(k, mlabel(k), k === UI.salesMonth)).join('')}</select></div>
+  <section class="tiles">
+    ${tileRaw('Invoices', String(live.length), list.length - live.length ? `${list.length - live.length} voided` : (UI.salesMonth === 'all' ? 'all months' : mlabel(UI.salesMonth)))}
+    ${tile('Sold', total, 'after discounts')}
+    ${tile('Paid at the counter', atSale, `${pct(total ? atSale / total : 0)} of sales`)}
+    ${tile('Still unpaid', left, 'on these invoices', '#customers', left > 0.5 ? 'neg' : '')}
+  </section>
+  <section class="panel">${list.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th class="hide-sm">Items</th><th class="n">Total</th><th>Status</th></tr></thead><tbody>
+    ${list.map(s => `<tr tabindex="0" class="click${s.void ? ' void' : ''}" data-act="openSale" data-id="${s.id}"><td class="mono">${invNoS(s)}</td><td>${fdateShort(s.date)}</td><td>${esc(custName(s))}</td><td class="hide-sm"><span class="sub">${esc(s.items.map(i => `${qtyFmt(i.qty)}× ${i.name}`).join(', ').slice(0, 70))}</span></td><td class="n">${money(s.total)}</td><td>${salePill(s)}</td></tr>`).join('')}
+  </tbody></table></div>` : emptyBox('No sales here', UI.salesMonth === 'all' ? 'Record a sale to see it here.' : `No sales in ${mlabel(UI.salesMonth)}${q ? ' match your search' : ''}.`)}</section>`;
+};
+
+VIEWS.stock = function(){
+  const cats = allCats();
+  const toks = UI.stockQ.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let rows = Object.entries(S.products).filter(([, p]) => UI.stockHidden || p.active !== false);
+  rows = rows.filter(([, p]) => (!UI.stockCat || (p.category || '') === UI.stockCat) && toks.every(t => `${p.name} ${p.sku || ''} ${p.brand || ''}`.toLowerCase().includes(t)));
+  if (UI.stockLow) rows = rows.filter(([id]) => isLow(id));
+  rows.sort((a, b) => String(a[1].name).localeCompare(String(b[1].name)));
+  const val = sum(rows, ([id]) => Math.max(0, (D.prod[id] || {}).stock || 0) * ((D.prod[id] || {}).avg || 0));
+  const units = sum(rows, ([id]) => Math.max(0, (D.prod[id] || {}).stock || 0));
+  const lowN = Object.keys(S.products).filter(isLow).length;
+  return header('Goods', 'Stock', `<button type="button" class="btn" data-act="adjustStock">${ic('adjust')}Adjust stock</button><button type="button" class="btn primary" data-act="newProduct">${ic('plus')}Add product</button>`) +
+  `<div class="toolbar"><div class="search">${ic('search')}<input id="stock-q" class="inp" type="search" placeholder="Search products" value="${esc(UI.stockQ)}" data-bind="stockQ" data-rr aria-label="Search products"></div>
+    <div class="chips" role="group" aria-label="Category">${['', ...cats].map(c => `<button type="button" class="chip" data-act="stockCat" data-v="${esc(c)}" aria-pressed="${UI.stockCat === c}">${esc(c || 'All')}</button>`).join('')}
+    <button type="button" class="chip" data-act="stockLow" aria-pressed="${UI.stockLow}">Low stock${lowN ? ` (${lowN})` : ''}</button></div></div>
+  <section class="tiles">
+    ${tile('Value at cost', val, `${rows.length} product${rows.length === 1 ? '' : 's'} shown`)}
+    ${tile('Potential sales value', sum(rows, ([id, p]) => Math.max(0, (D.prod[id] || {}).stock || 0) * (+p.price || 0)), 'at current sale prices')}
+    ${tileRaw('Units in stock', qtyFmt(units), 'all units added together')}
+    ${tile('On the way', sum(rows, ([id]) => ((D.prod[id] || {}).transit || 0) * ((D.prod[id] || {}).avg || 0)), 'imports not yet received, at cost')}
+  </section>
+  <section class="panel">${rows.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Product</th><th class="hide-sm">Category</th><th class="n">In stock</th><th class="n hide-sm">Avg cost</th><th class="n">Sale price</th><th class="n">Margin</th><th class="n hide-sm">Value</th></tr></thead><tbody>
+    ${rows.map(([id, p]) => { const x = D.prod[id] || {stock:0, avg:0, transit:0}; const mg = (+p.price > 0 && x.avg > 0) ? (p.price - x.avg) / p.price : null; const low = isLow(id);
+      return `<tr tabindex="0" class="click" data-act="openProduct" data-id="${id}"><td><b>${esc(p.name)}</b>${p.active === false ? ' <span class="pill">Hidden</span>' : ''}<span class="sub">${esc([p.sku, p.brand].filter(Boolean).join(' · '))}${x.transit ? ` · ${qtyFmt(x.transit)} on the way` : ''}</span></td><td class="hide-sm">${esc(p.category || '')}</td><td class="n">${low ? `<span class="pill ${x.stock <= 0 ? 'bad' : 'warn'}">${qtyU(x.stock, p.unit)}</span>` : qtyU(x.stock, p.unit)}</td><td class="n hide-sm">${x.avg ? money(x.avg) : '—'}</td><td class="n">${+p.price ? money(p.price) : '—'}</td><td class="n">${mg == null ? '—' : `<span class="${mg < 0 ? 'errline' : ''}">${pct(mg)}</span>`}</td><td class="n hide-sm">${money(Math.max(0, x.stock) * x.avg)}</td></tr>`; }).join('')}
+  </tbody></table></div>` : (Object.keys(S.products).length ? `<div class="empty"><strong>No match</strong><span>No products match these filters.</span></div>` : emptyBox('Your stock list is empty', 'Add each product with the quantity you have today. Purchases and sales then keep the count up to date.', `<button type="button" class="btn primary sm" data-act="newProduct">${ic('plus')}Add product</button>`))}
+  ${Object.values(S.products).some(p => p.active === false) ? `<div class="panel-h" style="border-top:1px solid var(--line);border-bottom:0"><span class="sub">Some products are hidden.</span><button type="button" class="btn ghost sm" data-act="stockHidden">${UI.stockHidden ? 'Hide them' : 'Show them'}</button></div>` : ''}
+  </section>`;
+};
+
+VIEWS.purchases = function(){
+  const q = UI.purchQ.trim().toLowerCase();
+  let rows = Object.entries(S.purchases);
+  rows = rows.filter(([, p]) => (!UI.purchStatus || (UI.purchStatus === 'received' ? p.status === 'received' : p.status !== 'received')) &&
+    (!q || `${p.ref || ''} ${(S.suppliers[p.supplierId] || {}).name || ''} ${(p.lines || []).map(l => prodName(l.productId)).join(' ')}`.toLowerCase().includes(q)));
+  rows.sort((a, b) => String(b[1].date).localeCompare(String(a[1].date)));
+  const m = todayStr().slice(0, 7);
+  const monRows = Object.entries(S.purchases).filter(([, p]) => String(p.date).slice(0, 7) === m);
+  const owed = sum(Object.values(D.supBal), b => Math.max(0, b));
+  return header('Goods', 'Purchases & imports', `<button type="button" class="btn" data-act="newPurchase" data-kind="market">${ic('plus')}Market purchase</button><button type="button" class="btn primary" data-act="newPurchase" data-kind="import">${ic('plus')}Import</button>`) +
+  `<div class="toolbar"><div class="search">${ic('search')}<input id="purch-q" class="inp" type="search" placeholder="Reference, supplier or product" value="${esc(UI.purchQ)}" data-bind="purchQ" data-rr aria-label="Search purchases"></div>
+   <div class="chips" role="group" aria-label="Status">${[['', 'All'], ['transit', 'In transit'], ['received', 'Received']].map(([v, l]) => `<button type="button" class="chip" data-act="purchStatus" data-v="${v}" aria-pressed="${UI.purchStatus === v}">${l}</button>`).join('')}</div></div>
+  <section class="tiles">
+    ${tile('Bought this month', sum(monRows, ([id]) => D.pc[id].landed), 'landed cost, all purchases')}
+    ${tile('Extra costs this month', sum(monRows, ([id]) => D.pc[id].extras), 'freight, customs, transport…')}
+    ${tile('In transit', D.transitValue, `${D.transitCount} shipment${D.transitCount === 1 ? '' : 's'}`)}
+    ${tile('You owe suppliers', owed, 'goods not yet paid', '#suppliers', owed > 0.5 ? 'neg' : '')}
+  </section>
+  <section class="panel">${rows.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Reference · supplier</th><th>Type</th><th>Status</th><th class="n">Landed cost</th><th class="n">Still owed</th></tr></thead><tbody>
+    ${rows.map(([id, p]) => { const c = D.pc[id]; return `<tr tabindex="0" class="click" data-act="openPurchase" data-id="${id}"><td>${fdateShort(p.date)}</td><td><b>${esc(p.ref || (p.kind === 'import' ? 'Import' : 'Market purchase'))}</b><span class="sub">${esc((S.suppliers[p.supplierId] || {}).name || 'No supplier')} · ${(p.lines || []).length} line${(p.lines || []).length === 1 ? '' : 's'}</span></td><td>${p.kind === 'import' ? `<span class="pill copper">Import · ${esc(p.currency || 'GNF')}</span>` : '<span class="pill">Market</span>'}</td><td>${p.status === 'received' ? '<span class="pill good">Received</span>' : '<span class="pill warn">In transit</span>'}</td><td class="n">${money(c.landed)}</td><td class="n">${c.balance > 0.5 ? money(c.balance) : '<span class="pill good">Paid</span>'}</td></tr>`; }).join('')}
+  </tbody></table></div>` : emptyBox('No purchases yet', 'Record goods bought at the market, or an import with its freight and customs costs. Received goods are added to stock.', `<span class="inline"><button type="button" class="btn sm" data-act="newPurchase" data-kind="market">Market purchase</button><button type="button" class="btn primary sm" data-act="newPurchase" data-kind="import">Import</button></span>`)}</section>`;
+};
+
+VIEWS.customers = function(){
+  const q = UI.custQ.trim().toLowerCase();
+  const last = {}; for (const s of D.sales) if (!s.void && s.customerId && !last[s.customerId]) last[s.customerId] = s.date;
+  let rows = Object.entries(S.customers).filter(([, k]) => !q || `${k.name} ${k.phone || ''}`.toLowerCase().includes(q));
+  rows.sort((a, b) => ((D.custBal[b[0]] || 0) - (D.custBal[a[0]] || 0)) || String(a[1].name).localeCompare(String(b[1].name)));
+  const owed = sum(Object.entries(D.custBal).filter(([id]) => S.customers[id]), ([, b]) => Math.max(0, b));
+  const n = Object.entries(D.custBal).filter(([id, b]) => b > 0.5 && S.customers[id]).length;
+  return header('Money', 'Customers & credit', `<button type="button" class="btn primary" data-act="newCustomer">${ic('plus')}Add customer</button>`) +
+  `<div class="toolbar"><div class="search">${ic('search')}<input id="cust-q" class="inp" type="search" placeholder="Name or phone" value="${esc(UI.custQ)}" data-bind="custQ" data-rr aria-label="Search customers"></div><span class="sub">${n ? `${n} customer${n === 1 ? '' : 's'} owe a total of <b>${money(owed)} GNF</b>` : 'No one owes you money right now.'}</span></div>
+  <section class="panel">${rows.length ? `<div class="list">${rows.map(([id, k]) => { const b = D.custBal[id] || 0; return `<button type="button" class="li" data-act="openCustomer" data-id="${id}"><span class="nm"><b>${esc(k.name)}</b><span class="sub">${esc(k.phone || 'No phone')}${last[id] ? ` · last bought ${fdate(last[id])}` : ''}</span></span><span class="amt">${b > 0.5 ? `<span class="pill bad">Owes ${money(b)}</span>` : b < -0.5 ? `<span class="pill accent">Credit ${money(-b)}</span>` : '<span class="pill good">Settled</span>'}</span></button>`; }).join('')}</div>`
+    : emptyBox(Object.keys(S.customers).length ? 'No match' : 'No customers yet', Object.keys(S.customers).length ? 'No customer matches your search.' : 'Add regular buyers, plumbers and contractors so credit sales are tracked by name.', Object.keys(S.customers).length ? '' : `<button type="button" class="btn primary sm" data-act="newCustomer">${ic('plus')}Add customer</button>`)}</section>`;
+};
+
+VIEWS.suppliers = function(){
+  const q = UI.supQ.trim().toLowerCase();
+  const count = {}; Object.values(S.purchases).forEach(p => { if (p.supplierId) count[p.supplierId] = (count[p.supplierId] || 0) + 1; });
+  let rows = Object.entries(S.suppliers).filter(([, k]) => !q || `${k.name} ${k.phone || ''} ${k.location || ''}`.toLowerCase().includes(q));
+  rows.sort((a, b) => ((D.supBal[b[0]] || 0) - (D.supBal[a[0]] || 0)) || String(a[1].name).localeCompare(String(b[1].name)));
+  const owed = sum(Object.values(D.supBal), b => Math.max(0, b));
+  return header('Goods', 'Suppliers', `<button type="button" class="btn primary" data-act="newSupplier">${ic('plus')}Add supplier</button>`) +
+  `<div class="toolbar"><div class="search">${ic('search')}<input id="sup-q" class="inp" type="search" placeholder="Name, phone or location" value="${esc(UI.supQ)}" data-bind="supQ" data-rr aria-label="Search suppliers"></div><span class="sub">${owed > 0.5 ? `You owe suppliers <b>${money(owed)} GNF</b>` : 'All suppliers are paid.'}</span></div>
+  <section class="panel">${rows.length ? `<div class="list">${rows.map(([id, k]) => { const b = D.supBal[id] || 0; return `<button type="button" class="li" data-act="openSupplier" data-id="${id}"><span class="nm"><b>${esc(k.name)}</b><span class="sub">${k.kind === 'import' ? 'Import' : k.kind === 'both' ? 'Market & import' : 'Market'}${k.location ? ' · ' + esc(k.location) : ''} · ${count[id] || 0} purchase${(count[id] || 0) === 1 ? '' : 's'}</span></span><span class="amt">${b > 0.5 ? `<span class="pill bad">You owe ${money(b)}</span>` : '<span class="pill good">Paid up</span>'}</span></button>`; }).join('')}</div>`
+    : emptyBox(Object.keys(S.suppliers).length ? 'No match' : 'No suppliers yet', Object.keys(S.suppliers).length ? 'No supplier matches your search.' : 'Add the wholesalers you buy from at the market and your import suppliers abroad.', Object.keys(S.suppliers).length ? '' : `<button type="button" class="btn primary sm" data-act="newSupplier">${ic('plus')}Add supplier</button>`)}</section>`;
+};
+
+VIEWS.expenses = function(){
+  const e = UI.exp;
+  const months = [...new Set([todayStr().slice(0, 7), ...D.expenses.map(x => x.date.slice(0, 7))])].sort().reverse();
+  const list = D.expenses.filter(x => UI.expMonth === 'all' || x.date.slice(0, 7) === UI.expMonth);
+  const live = list.filter(x => !x.void);
+  const byCat = {}; live.forEach(x => { byCat[x.category] = (byCat[x.category] || 0) + x.amount; });
+  const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]); const max = Math.max(1, ...cats.map(c => c[1]));
+  const total = sum(live, x => x.amount);
+  return header('Running costs', 'Expenses') +
+  `<section class="panel"><div class="panel-h"><h2>Add an expense</h2></div><div class="panel-b"><div class="form">
+    <div class="field"><label for="exp-date">Date</label><input id="exp-date" class="inp" type="date" value="${esc(e.date)}" data-bind="exp.date"></div>
+    <div class="field"><label for="exp-cat">Category</label><select id="exp-cat" class="inp" data-bind="exp.category">${opts(EXP_CATS, e.category)}</select></div>
+    <div class="field"><label for="exp-amt">Amount (GNF)</label><input id="exp-amt" class="inp n" inputmode="decimal" value="${esc(e.amount)}" data-bind="exp.amount" placeholder="0"></div>
+    <div class="field"><label for="exp-method">Paid by</label><select id="exp-method" class="inp" data-bind="exp.method">${opts(METHODS, e.method)}</select></div>
+    <div class="field full"><label for="exp-note">Note</label><div class="inline"><input id="exp-note" class="inp grow" value="${esc(e.note)}" data-bind="exp.note" placeholder="e.g. Generator fuel, 20 liters"><button type="button" class="btn primary" data-act="addExpense">${ic('plus')}Add expense</button></div></div>
+  </div></div></section>
+  <div class="toolbar"><select id="exp-m" class="inp" data-bind="expMonth" data-rr aria-label="Month">${opt('all', 'All months', UI.expMonth === 'all')}${months.map(k => opt(k, mlabel(k), k === UI.expMonth)).join('')}</select><span class="sub">Total <b>${money(total)} GNF</b></span></div>
+  <div class="grid2">
+    <section class="panel"><div class="panel-h"><h2>By category</h2></div><div class="panel-b">${cats.length ? `<div class="bars">${cats.map(([c, v]) => `<div class="bar-row"><span>${esc(c)}</span><span class="num">${money(v)}</span><div class="bar-track"><div class="bar-fill copper" style="width:${(v / max * 100).toFixed(1)}%"></div></div></div>`).join('')}</div>` : emptyBox('No expenses', 'Nothing recorded for this period.')}</div></section>
+    <section class="panel"><div class="panel-h"><h2>Entries</h2></div>${list.length ? `<div class="scroll"><table class="tbl"><tbody>${list.map(x => `<tr class="${x.void ? 'void' : ''}"><td>${fdateShort(x.date)}</td><td><b>${esc(x.category)}</b><span class="sub">${esc(x.note || '')}${x.note ? ' · ' : ''}${esc(x.method || '')}</span></td><td class="n">${money(x.amount)}</td><td class="n">${x.void ? '<span class="pill bad">Removed</span>' : UI.confirmExp === x.id ? `<span class="inline"><button type="button" class="btn danger solid sm" data-act="voidExpense" data-id="${x.id}">Remove</button><button type="button" class="btn ghost sm" data-act="cancelExp">Keep</button></span>` : `<button type="button" class="btn ghost sm iconbtn" data-act="askExp" data-id="${x.id}" aria-label="Remove expense">${ic('x')}</button>`}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('No expenses', 'Rent, salaries, fuel and other running costs go here. They are taken off gross profit in Reports.')}</section>
+  </div>`;
+};
+
+VIEWS.reports = function(){
+  const cur = todayStr().slice(0, 7), y = cur.slice(0, 4);
+  const choices = [['m:' + cur, 'This month'], ['m:' + addMonths(cur, -1), 'Last month']];
+  for (let i = 2; i < 12; i++){ const k = addMonths(cur, -i); choices.push(['m:' + k, mlabel(k)]); }
+  choices.push(['y:' + y, 'This year (' + y + ')'], ['y:' + (+y - 1), 'Last year (' + (+y - 1) + ')'], ['all', 'All time']);
+  const per = UI.repPeriod;
+  const pred = per === 'all' ? () => true : per.startsWith('y:') ? d => d.slice(0, 4) === per.slice(2) : d => d.slice(0, 7) === per.slice(2);
+  const st = periodStats(pred);
+  const byProd = {}, byCat = {}, byStaff = {}, byMethod = {};
+  for (const s of st.ss){
+    const sh = s.subtotal > 0 ? s.total / s.subtotal : 1; // spread invoice discount across lines
+    for (const i of s.items){
+      const rev = i.qty * i.price * sh, cost = i.qty * i.cost;
+      const k = i.productId || i.name; const b = byProd[k] || (byProd[k] = {name: (S.products[i.productId] || {}).name || i.name, qty:0, rev:0, cost:0});
+      b.qty += i.qty; b.rev += rev; b.cost += cost;
+      const cat = (S.products[i.productId] || {}).category || 'Other'; const c = byCat[cat] || (byCat[cat] = {rev:0, cost:0}); c.rev += rev; c.cost += cost;
+    }
+    const sk = s.by || ''; const f = byStaff[sk] || (byStaff[sk] = {n:0, rev:0}); f.n++; f.rev += s.total;
+    if (s.paid) byMethod[s.method || 'Cash'] = (byMethod[s.method || 'Cash'] || 0) + s.paid;
+  }
+  st.pays.forEach(p => { byMethod[p.method || 'Cash'] = (byMethod[p.method || 'Cash'] || 0) + p.amount; });
+  const top = Object.values(byProd).sort((a, b) => (b.rev - b.cost) - (a.rev - a.cost)).slice(0, 10);
+  const cats = Object.entries(byCat).sort((a, b) => b[1].rev - a[1].rev);
+  const exCats = {}; st.ex.forEach(x => { exCats[x.category] = (exCats[x.category] || 0) + x.amount; });
+  const methods = Object.entries(byMethod).sort((a, b) => b[1] - a[1]); const mMax = Math.max(1, ...methods.map(m => m[1]));
+  const label = (choices.find(c => c[0] === per) || [0, 'Period'])[1];
+  return header('Reports', 'Profit & performance') +
+  `<div class="toolbar"><select id="rep-p" class="inp" data-bind="repPeriod" data-rr aria-label="Period">${choices.map(([v, l]) => opt(v, l, v === per)).join('')}</select><span class="sub">${esc(label)} · ${st.count} invoice${st.count === 1 ? '' : 's'}</span></div>
+  <section class="tiles">
+    ${tile('Sales', st.revenue, 'after discounts', '', 'hl')}
+    ${tile('Cost of goods sold', st.cogs, 'landed cost of what was sold')}
+    ${tile('Gross profit', st.gross, `${pct(st.margin)} margin`, '', st.gross < 0 ? 'neg' : '')}
+    ${tile('Net profit', st.net, `gross profit minus ${short(st.expenses)} expenses`, '', st.net < 0 ? 'neg' : 'pos')}
+  </section>
+  <section class="panel"><div class="panel-h"><h2>Last 12 months</h2><div class="legend"><span><i style="background:var(--accent)"></i>Sales</span><span><i style="background:var(--good)"></i>Gross profit</span></div></div><div class="panel-b"><div class="scroll">${monthChart()}</div></div></section>
+  <div class="grid2">
+    <section class="panel"><div class="panel-h"><h2>By category</h2></div>${cats.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Category</th><th class="n">Sales</th><th class="n">Gross profit</th><th class="n">Margin</th></tr></thead><tbody>${cats.map(([c, v]) => `<tr><td>${esc(c)}</td><td class="n">${money(v.rev)}</td><td class="n">${money(v.rev - v.cost)}</td><td class="n">${pct(v.rev ? (v.rev - v.cost) / v.rev : 0)}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('No sales in this period', 'Pick another period above.')}</section>
+    <section class="panel"><div class="panel-h"><h2>Money received</h2><span class="sub">${money(st.cashIn)} GNF</span></div><div class="panel-b">${methods.length ? `<div class="bars">${methods.map(([k, v]) => `<div class="bar-row"><span>${esc(k)}</span><span class="num">${money(v)}</span><div class="bar-track"><div class="bar-fill" style="width:${(v / mMax * 100).toFixed(1)}%"></div></div></div>`).join('')}</div>` : emptyBox('Nothing received', 'No payments in this period.')}</div></section>
+  </div>
+  <section class="panel"><div class="panel-h"><h2>Most profitable products</h2></div>${top.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Product</th><th class="n">Qty sold</th><th class="n">Sales</th><th class="n hide-sm">Cost</th><th class="n">Gross profit</th><th class="n hide-sm">Margin</th></tr></thead><tbody>${top.map(b => `<tr><td>${esc(b.name)}</td><td class="n">${qtyFmt(b.qty)}</td><td class="n">${money(b.rev)}</td><td class="n hide-sm">${money(b.cost)}</td><td class="n">${money(b.rev - b.cost)}</td><td class="n hide-sm">${pct(b.rev ? (b.rev - b.cost) / b.rev : 0)}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('No sales in this period', 'Pick another period above.')}</section>
+  <div class="grid2">
+    <section class="panel"><div class="panel-h"><h2>Expenses</h2><span class="sub">${money(st.expenses)} GNF</span></div>${Object.keys(exCats).length ? `<div class="scroll"><table class="tbl"><tbody>${Object.entries(exCats).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="n">${money(v)}</td><td class="n">${pct(st.expenses ? v / st.expenses : 0)}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('No expenses', 'Nothing recorded in this period.')}</section>
+    <section class="panel"><div class="panel-h"><h2>Sales by team member</h2></div>${Object.keys(byStaff).length ? `<div class="scroll"><table class="tbl"><tbody>${Object.entries(byStaff).sort((a, b) => b[1].rev - a[1].rev).map(([k, v]) => `<tr><td>${esc(staffName(k))}</td><td class="n">${v.n} invoice${v.n === 1 ? '' : 's'}</td><td class="n">${money(v.rev)}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('No sales in this period', 'Pick another period above.')}</section>
+  </div>`;
+};
+function monthChart(){
+  const cur = todayStr().slice(0, 7); const months = Array.from({length:12}, (_, i) => addMonths(cur, i - 11));
+  const data = months.map(k => { const s = periodStats(d => d.slice(0, 7) === k); return {k, rev: s.revenue, gross: Math.max(0, s.gross)}; });
+  const max = Math.max(1, ...data.map(d => d.rev));
+  const raw = max / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+  const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * mag;
+  const ticks = [0]; while (ticks[ticks.length - 1] < max) ticks.push(ticks[ticks.length - 1] + step);
+  const top = ticks[ticks.length - 1];
+  const W = 720, H = 250, L = 52, R = 10, T = 12, B = 30, cw = (W - L - R) / 12, bw = Math.min(20, (cw - 12) / 2);
+  const y = v => T + (H - T - B) * (1 - v / top);
+  let g = ticks.map(t => `<line class="gl" x1="${L}" x2="${W - R}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/><text x="${L - 8}" y="${(y(t) + 4).toFixed(1)}" text-anchor="end">${t === 0 ? '0' : short(t)}</text>`).join('');
+  g += data.map((d, i) => {
+    const cx = L + cw * i + cw / 2, x1 = cx - bw - 1, x2 = cx + 1;
+    const h1 = (H - T - B) * d.rev / top, h2 = (H - T - B) * d.gross / top;
+    return `<rect class="b1" x="${x1.toFixed(1)}" y="${(H - B - h1).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, h1).toFixed(1)}" rx="2"><title>${mlabel(d.k)} sales: ${money(d.rev)} GNF</title></rect>
+      <rect class="b2" x="${x2.toFixed(1)}" y="${(H - B - h2).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, h2).toFixed(1)}" rx="2"><title>${mlabel(d.k)} gross profit: ${money(d.gross)} GNF</title></rect>
+      <text x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle"${i === 11 ? ' class="now"' : ''}>${MON[+d.k.slice(5) - 1]}${d.k.slice(5) === '01' || i === 0 ? ' ’' + d.k.slice(2, 4) : ''}</text>`;
+  }).join('');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Sales and gross profit for each of the last 12 months">${g}</svg>`;
+}
+
+VIEWS.team = function(){
+  const t = UI.team;
+  const members = Object.entries(S.members).sort((a, b) => (a[1].role === 'owner' ? -1 : 0) - (b[1].role === 'owner' ? -1 : 0) || String(a[0]).localeCompare(String(b[0])));
+  const used = usedCodes();
+  const nextCode = LETTERS.find(l => !used.has(l)) || '';
+  const link = location.origin + location.pathname;
+  return header('Setup', 'Team') +
+  `<section class="panel"><div class="panel-h"><h2>Add a team member</h2></div><div class="panel-b stack"><div class="form">
+    <div class="field"><label for="tm-email">Their email</label><input id="tm-email" class="inp" type="email" value="${esc(t.email)}" data-bind="team.email" placeholder="name@gmail.com" autocomplete="off"></div>
+    <div class="field"><label for="tm-name">Name</label><input id="tm-name" class="inp" value="${esc(t.name)}" data-bind="team.name" placeholder="Shown on sales and reports"></div>
+    <div class="field"><label for="tm-code">Invoice letter</label><input id="tm-code" class="inp" maxlength="2" value="${esc(t.code)}" data-bind="team.code" placeholder="${esc(nextCode)}"><span class="hint">Their invoices are numbered F-${esc((t.code || nextCode || 'B').toUpperCase())}-00001, so two phones offline never clash</span></div>
+  </div><div><button type="button" class="btn primary" data-act="addMember">${ic('plus')}Add to team</button></div></div></section>
+  <section class="panel"><div class="panel-h"><h2>People with access</h2></div>${members.length ? `<div class="list">${members.map(([e, m]) => `<button type="button" class="li" data-act="editMember" data-id="${esc(e)}"><span class="nm"><b>${esc(m.name || e.split('@')[0])}</b><span class="sub">${esc(e)}</span></span><span class="amt"><span class="pill ${m.active === false ? 'bad' : m.role === 'owner' ? 'accent' : 'good'}">${m.active === false ? 'Removed' : m.role === 'owner' ? 'Owner' : 'Staff'}</span><br><span class="sub mono">Invoices ${esc((m.code || 'A').toUpperCase())}</span></span></button>`).join('')}</div>` : emptyBox('Only you so far', 'Add the people who sell or buy for the shop.')}</section>
+  <section class="panel"><div class="panel-h"><h2>How staff get in</h2></div><div class="panel-b stack">
+    <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px"><li>Add their email above.</li><li>Send them the app link: <b class="mono" style="overflow-wrap:anywhere">${esc(link)}</b> <button type="button" class="btn ghost sm" data-act="copyLink">${ic('copy')}Copy</button></li><li>They open it and tap <b>Continue with Google</b>, or create an account with that same email and confirm the link we email them.</li><li>On their phone, they can add it to the home screen to open it like an app.</li></ol>
+  </div></section>`;
+};
+
+VIEWS.shop = function(){
+  if (!UI.shop) UI.shop = {shopName:'', address:'', phone:'', prefix:'F', footer:'', ...S.settings};
+  const f = UI.shop;
+  const counts = `${Object.keys(S.products).length} products · ${D.sales.length} invoices · ${Object.keys(S.purchases).length} purchases · ${Object.keys(S.customers).length} customers`;
+  return header('Setup', 'Shop settings') +
+  `<section class="panel"><div class="panel-h"><h2>Shop details</h2><span class="sub">Printed at the top of every invoice</span></div><div class="panel-b stack"><div class="form">
+    <div class="field"><label for="sh-name">Shop name</label><input id="sh-name" class="inp" value="${esc(f.shopName)}" data-bind="shop.shopName" placeholder="e.g. Barry Électroménager & Plomberie"></div>
+    <div class="field"><label for="sh-phone">Phone</label><input id="sh-phone" class="inp" value="${esc(f.phone)}" data-bind="shop.phone" placeholder="+224 6xx xx xx xx"></div>
+    <div class="field full"><label for="sh-addr">Address</label><input id="sh-addr" class="inp" value="${esc(f.address)}" data-bind="shop.address" placeholder="Marché Madina, Conakry"></div>
+    <div class="field"><label for="sh-prefix">Invoice prefix</label><input id="sh-prefix" class="inp" value="${esc(f.prefix)}" data-bind="shop.prefix" maxlength="6"><span class="hint">Invoices look like ${esc((f.prefix || 'F').trim() || 'F')}-A-00001</span></div>
+    <div class="field full"><label for="sh-foot">Invoice footer</label><input id="sh-foot" class="inp" value="${esc(f.footer)}" data-bind="shop.footer" placeholder="Warranty, return policy or a thank-you line"></div>
+  </div><div><button type="button" class="btn primary" data-act="saveShop">Save shop details</button></div></div></section>
+  <div class="grid2">
+    <section class="panel"><div class="panel-h"><h2>Your account</h2></div><div class="panel-b stack">
+      <p>Signed in as <b>${esc(S.email)}</b>${S.isOwner ? ' (owner)' : ''}. Your invoices use the letter <b>${esc(mySeries())}</b>.</p>
+      ${S.installEvt ? `<div><button type="button" class="btn" data-act="install">${ic('download')}Install as an app</button></div>` : `<p class="sub">To open it like an app: on Android, Chrome menu → <b>Add to Home screen</b>. On iPhone, Safari → Share → <b>Add to Home Screen</b>.</p>`}
+      <div><button type="button" class="btn" data-act="signOut">${ic('logout')}Sign out</button></div>
+    </div></section>
+    <section class="panel"><div class="panel-h"><h2>Backup & export</h2></div><div class="panel-b stack">
+      <p class="sub">${counts}</p>
+      <div class="inline"><button type="button" class="btn" data-act="backupJson">${ic('download')}Full backup (.json)</button><button type="button" class="btn" data-act="exportSales">${ic('download')}Sales lines (.csv)</button><button type="button" class="btn" data-act="exportStock">${ic('download')}Stock list (.csv)</button></div>
+      <p class="hint">CSV files open in Excel or Google Sheets. Firebase keeps the data safe online; a monthly backup on a computer is a good extra copy.</p>
+    </div></section>
+  </div>
+  ${S.isOwner ? `<section class="panel"><div class="panel-h"><h2>Bring in records from the Claude version</h2></div><div class="panel-b stack">
+      <p class="sub">Choose the backup file from the earlier version of this app. Products, customers, suppliers, purchases, sales, payments and expenses are copied in with the same numbers. Importing the same file twice doesn’t create duplicates. Do this before recording new sales, so invoice numbers continue in order.</p>
+      <div class="inline"><label class="btn" for="imp-file">${ic('upload')}Choose backup file</label><input id="imp-file" type="file" accept=".json,application/json" hidden></div>
+      ${UI.importInfo ? `<p class="sub">${esc(UI.importInfo)}</p>` : ''}
+    </div></section>` : ''}`;
+};
+
+/* ================= modals ================= */
+const MODALS = [], MODAL_BY_EL = new Map();
+function openModal(cfg){
+  const m = Object.assign({state:{}, acts:{}, ins:{}}, cfg);
+  const scrim = document.createElement('div'); scrim.className = 'scrim';
+  scrim.innerHTML = `<div class="modal${cfg.wide ? ' wide' : ''}" role="dialog" aria-modal="true" tabindex="-1"><div class="modal-h"><h2></h2><button type="button" class="btn ghost iconbtn" data-close aria-label="Close">${ic('x')}</button></div><div class="modal-b"></div><div class="modal-f"></div></div>`;
+  m.el = scrim; m.hEl = scrim.querySelector('h2'); m.bEl = scrim.querySelector('.modal-b'); m.fEl = scrim.querySelector('.modal-f');
+  m.render = () => { const top = scrim.scrollTop; withFocus(scrim, () => { m.hEl.textContent = m.title(); m.bEl.innerHTML = m.body(); const f = m.foot ? m.foot() : ''; m.fEl.innerHTML = f; m.fEl.hidden = !f; }); scrim.scrollTop = top; };
+  m.close = () => closeModal(m);
+  $('#modals').appendChild(scrim); MODALS.push(m); MODAL_BY_EL.set(scrim, m); document.body.classList.add('locked');
+  m.render();
+  scrim.querySelector('.modal').focus({preventScroll:true});
+  return m;
+}
+function closeModal(m){
+  if (!m) return;
+  const i = MODALS.indexOf(m); if (i >= 0) MODALS.splice(i, 1);
+  MODAL_BY_EL.delete(m.el); m.el.remove();
+  if (m.onClose) m.onClose();
+  if (!MODALS.length) document.body.classList.remove('locked');
+}
+const closeAll = () => { while (MODALS.length) closeModal(MODALS[MODALS.length - 1]); };
+
+function moreSheet(){
+  const items = [['sales','Sales & invoices','receipt'], ['customers','Customers & credit','users'], ['suppliers','Suppliers','store'], ['expenses','Expenses','wallet'], ['reports','Reports','chart'], ...(S.isOwner ? [['team','Team','team']] : []), ['shop','Shop settings','sliders']];
+  openModal({title: () => 'More', live: true, body: () => `<div class="navgroup">${items.map(([r, l, i]) => `<button type="button" class="navlink" data-act="go" data-to="${r}"${UI.view === r ? ' aria-current="page"' : ''}>${ic(i)}<span>${l}</span></button>`).join('')}</div><div class="sync"><span class="dot ${syncInfo()[0]}"></span>${syncInfo()[1]}</div><div class="sync"><span>${esc(S.email)}</span></div>`});
+}
+
+function confirmBar(text, yesAct, yesLabel){ return `<div class="confirmbar"><p>${text}</p><button type="button" class="btn ghost" data-act="confirmNo">Keep it</button><button type="button" class="btn danger solid" data-act="${yesAct}">${yesLabel}</button></div>`; }
+
+/* ----- product ----- */
+function productModal(id, o = {}){
+  const src = id ? S.products[id] : null;
+  const pid = id || uid();
+  const st = src ? {name:src.name || '', sku:src.sku || '', category:src.category || '', brand:src.brand || '', unit:src.unit || 'piece', price: src.price != null ? String(src.price) : '', cost: src.cost ? String(src.cost) : '', min: src.min ? String(src.min) : '', note:src.note || '', confirm:false}
+                 : {name:o.name || '', sku:'', category:o.category || UI.stockCat || '', brand:'', unit:'piece', price:'', cost:'', min:'', note:'', openQty:'', confirm:false};
+  const m = openModal({
+    state: st, live: !!id, wide: !!id,
+    title: () => id ? (st.name || 'Product') : 'Add product',
+    body: () => {
+      const x = D.prod[pid] || {stock:0, avg:0, transit:0, moves:0, sold:0};
+      const form = `<div class="form">
+        <div class="field full"><label for="pm-name">Product name</label><input id="pm-name" class="inp" value="${esc(st.name)}" data-bind="name" placeholder="e.g. Fridge LG 260 L, or PVC pipe 32 mm"></div>
+        <div class="field"><label for="pm-cat">Category</label><input id="pm-cat" class="inp" list="pm-cats" value="${esc(st.category)}" data-bind="category" placeholder="Appliances or Plumbing"><datalist id="pm-cats">${allCats().map(c => `<option value="${esc(c)}">`).join('')}</datalist></div>
+        <div class="field"><label for="pm-brand">Brand</label><input id="pm-brand" class="inp" value="${esc(st.brand)}" data-bind="brand" placeholder="LG, Samsung, Grohe…"></div>
+        <div class="field"><label for="pm-sku">Code / model</label><input id="pm-sku" class="inp" value="${esc(st.sku)}" data-bind="sku" placeholder="Optional"></div>
+        <div class="field"><label for="pm-unit">Sold by</label><select id="pm-unit" class="inp" data-bind="unit">${opts(UNITS, st.unit)}</select></div>
+        <div class="field"><label for="pm-price">Sale price (GNF)</label><input id="pm-price" class="inp n" inputmode="decimal" value="${esc(st.price)}" data-bind="price" data-sa placeholder="0"></div>
+        <div class="field"><label for="pm-cost">Cost price (GNF)</label><input id="pm-cost" class="inp n" inputmode="decimal" value="${esc(st.cost)}" data-bind="cost" data-sa placeholder="0"><span class="hint">Used until you record a purchase of it</span></div>
+        <div class="field"><label for="pm-min">Reorder when stock reaches</label><input id="pm-min" class="inp n" inputmode="decimal" value="${esc(st.min)}" data-bind="min" placeholder="0"></div>
+        ${id ? '' : `<div class="field"><label for="pm-open">Quantity in stock now</label><input id="pm-open" class="inp n" inputmode="decimal" value="${esc(st.openQty)}" data-bind="openQty" placeholder="0"><span class="hint">Recorded as opening stock at the cost price</span></div>`}
+        <div class="field full"><label for="pm-note">Note</label><input id="pm-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="Size, color, warranty…"></div>
+      </div>`;
+      if (!id) return form;
+      const cur = S.products[pid] || src;
+      const mg = (+cur.price > 0 && x.avg > 0) ? (cur.price - x.avg) / cur.price : null;
+      return `<section class="tiles">
+          ${tileRaw('In stock', `${qtyFmt(x.stock)}<small>${esc((cur.unit || 'piece').toUpperCase())}</small>`, x.transit ? qtyFmt(x.transit) + ' on the way' : 'none on the way')}
+          ${tile('Average cost', x.avg, 'landed, per unit')}
+          ${tile('Stock value', Math.max(0, x.stock) * x.avg, 'at cost')}
+          ${tileRaw('Margin', mg == null ? '—' : pct(mg), `${qtyFmt(x.sold)} sold in total`)}
+        </section>
+        ${form}
+        <div class="sect"><div class="sect-h"><h3>Stock movements</h3><button type="button" class="btn sm" data-act="adjustThis">${ic('adjust')}Adjust stock</button></div>${movements(pid)}</div>`;
+    },
+    foot: () => st.confirm ? confirmBar('Delete this product?', 'del', 'Delete product') :
+      `${id ? ((D.prod[pid] || {}).moves ? `<button type="button" class="btn ghost" data-act="toggleActive">${(S.products[pid] || src).active === false ? 'Show in lists again' : 'Hide from lists'}</button>` : `<button type="button" class="btn ghost danger" data-act="askDel">Delete</button>`) : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">${id ? 'Save changes' : 'Add product'}</button>`,
+    acts: {
+      save: async () => {
+        const name = st.name.trim(); if (!name) return toast('Give the product a name.');
+        const price = parseNum(st.price), cost = parseNum(st.cost), min = parseNum(st.min);
+        if (st.price && isNaN(price)) return toast('The sale price isn’t a number.');
+        if (st.cost && isNaN(cost)) return toast('The cost price isn’t a number.');
+        const dup = Object.entries(S.products).find(([k, p]) => k !== pid && String(p.name).trim().toLowerCase() === name.toLowerCase() && (p.sku || '').trim().toLowerCase() === st.sku.trim().toLowerCase());
+        if (dup) return toast('A product with this name and code already exists.');
+        const base = S.products[pid] || src || {};
+        const doc = {name, sku: st.sku.trim(), category: st.category.trim(), brand: st.brand.trim(), unit: st.unit, price: isNaN(price) ? 0 : price, cost: isNaN(cost) ? 0 : cost, min: isNaN(min) ? 0 : min, note: st.note.trim(), active: base.active !== false, editedAt: nowIso()};
+        if (!src){ doc.createdAt = nowIso(); doc.by = S.email; }
+        const ops = [{col:'products', id:pid, data:doc}];
+        const open = num(st.openQty);
+        if (!src && open > 0) ops.push({col:'adjustments', id:uid(), merge:false, data:{date: todayStr(), productId: pid, qty: open, unitCost: doc.cost || 0, reason: 'Opening stock', note: '', by: S.email, at: nowIso()}});
+        if (await write(ops, src ? 'Product saved' : 'Product added')){ m.close(); if (o.onSaved) o.onSaved(pid, doc); }
+      },
+      askDel: () => { st.confirm = true; m.render(); },
+      confirmNo: () => { st.confirm = false; m.render(); },
+      del: async () => { if (await write([{col:'products', id:pid, data:{deleted:true}}], 'Product deleted')) m.close(); },
+      toggleActive: async () => { const cur = S.products[pid] || src; await write([{col:'products', id:pid, data:{active: cur.active === false}}], cur.active === false ? 'Shown in lists again' : 'Hidden from lists'); m.close(); },
+      adjustThis: () => adjustModal(pid)
+    }
+  });
+}
+function movements(pid){
+  const ev = [];
+  for (const [id, p] of Object.entries(S.purchases)) for (const l of (D.pc[id] ? D.pc[id].lines : [])) if (l.productId === pid)
+    ev.push({date: p.status === 'received' ? (p.receivedDate || p.date) : p.date, what: `${p.kind === 'import' ? 'Import' : 'Purchase'} ${p.ref || ''}`.trim(), sub: (S.suppliers[p.supplierId] || {}).name || '', qty: l.qty, transit: p.status !== 'received', cost: l.unit, act: `data-act="openPurchase" data-id="${id}"`});
+  for (const a of Object.values(S.adjustments)) if (a.productId === pid) ev.push({date: a.date, what: a.reason || 'Adjustment', sub: a.note || '', qty: +a.qty || 0});
+  for (const s of D.sales) if (!s.void) for (const i of s.items) if (i.productId === pid) ev.push({date: s.date, what: `Sale ${invNoS(s)}`, sub: custName(s), qty: -i.qty, price: i.price, act: `data-act="openSale" data-id="${s.id}"`});
+  ev.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  if (!ev.length) return `<p class="sub">No movements yet.</p>`;
+  return `<div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Movement</th><th class="n">Qty</th><th class="n hide-sm">Unit GNF</th></tr></thead><tbody>${ev.slice(0, 30).map(e => `<tr${e.act ? ` tabindex="0" class="click" ${e.act}` : ''}><td>${fdateShort(e.date)}</td><td>${esc(e.what)}${e.transit ? ' <span class="pill warn">In transit</span>' : ''}<span class="sub">${esc(e.sub)}</span></td><td class="n">${e.transit ? '' : e.qty > 0 ? '+' : ''}${qtyFmt(e.qty)}</td><td class="n hide-sm">${e.cost ? money(e.cost) : e.price ? money(e.price) : ''}</td></tr>`).join('')}</tbody></table></div>${ev.length > 30 ? `<p class="hint">Showing the latest 30 of ${ev.length}.</p>` : ''}`;
+}
+
+/* ----- stock adjustment ----- */
+function adjustModal(productId){
+  const st = {label: productId ? prodLabel(productId) : '', productId: productId || '', reason: 'Stock count correction', qty:'', counted:'', unitCost:'', date: todayStr(), note:''};
+  const m = openModal({
+    state: st, live: true,
+    title: () => 'Adjust stock',
+    body: () => {
+      const x = D.prod[st.productId] || {stock:0, avg:0}; const p = S.products[st.productId];
+      const r = st.reason;
+      return `<div class="form">
+        <div class="field full"><label for="ad-prod">Product</label><input id="ad-prod" class="inp" list="ad-prods" value="${esc(st.label)}" data-in="adProd" placeholder="Start typing a product name" autocomplete="off"><datalist id="ad-prods">${sortedBy(S.products).filter(([, q]) => q.active !== false).map(([k]) => `<option value="${esc(prodLabel(k))}">`).join('')}</datalist>${p ? `<span class="hint">${qtyU(x.stock, p.unit)} recorded in stock now</span>` : ''}</div>
+        <div class="field full"><label for="ad-reason">Reason</label><select id="ad-reason" class="inp" data-bind="reason" data-rr>${opts(ADJ_REASONS, r)}</select></div>
+        ${r === 'Stock count correction' ? `<div class="field"><label for="ad-count">Quantity counted on the shelf</label><input id="ad-count" class="inp n" inputmode="decimal" value="${esc(st.counted)}" data-bind="counted" data-rr placeholder="0">${p && st.counted !== '' ? `<span class="hint">Change: ${num(st.counted) - x.stock > 0 ? '+' : ''}${qtyFmt(num(st.counted) - x.stock)}</span>` : ''}</div>`
+          : `<div class="field"><label for="ad-qty">${['Damaged or lost', 'Own use', 'Other decrease'].includes(r) ? 'Quantity to remove' : 'Quantity to add'}</label><input id="ad-qty" class="inp n" inputmode="decimal" value="${esc(st.qty)}" data-bind="qty" placeholder="0"></div>`}
+        ${['Opening stock', 'Other increase'].includes(r) ? `<div class="field"><label for="ad-cost">Cost per unit (GNF)</label><input id="ad-cost" class="inp n" inputmode="decimal" value="${esc(st.unitCost)}" data-bind="unitCost" placeholder="${p && p.cost ? esc(String(p.cost)) : '0'}"></div>` : ''}
+        <div class="field"><label for="ad-date">Date</label><input id="ad-date" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
+        <div class="field full"><label for="ad-note">Note</label><input id="ad-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="Optional"></div>
+      </div>`;
+    },
+    foot: () => `<button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Save adjustment</button>`,
+    ins: { adProd: el => { st.label = el.value; const id = findProdByLabel(el.value); if (id !== st.productId){ st.productId = id; m.render(); } } },
+    acts: {
+      save: async () => {
+        if (!st.productId) return toast('Pick a product from the list.');
+        const x = D.prod[st.productId] || {stock:0}; const p = S.products[st.productId] || {};
+        let q;
+        if (st.reason === 'Stock count correction'){ if (st.counted === '' || isNaN(parseNum(st.counted))) return toast('Enter the quantity you counted.'); q = r3(num(st.counted) - x.stock); if (!q) return toast('The count matches the stock. Nothing to change.'); }
+        else { q = num(st.qty); if (!(q > 0)) return toast('Enter a quantity above zero.'); if (['Damaged or lost', 'Own use', 'Other decrease'].includes(st.reason)) q = -q; }
+        const unitCost = q > 0 ? (st.unitCost !== '' ? num(st.unitCost) : (+p.cost || (x.avg || 0))) : 0;
+        if (await write([{col:'adjustments', id:uid(), merge:false, data:{date: st.date || todayStr(), productId: st.productId, qty: q, unitCost, reason: st.reason, note: st.note.trim(), by: S.email, at: nowIso()}}], 'Stock adjusted')) m.close();
+      }
+    }
+  });
+}
+
+/* ----- customer ----- */
+function customerForm(id, onSaved){
+  const src = id ? S.customers[id] : null; const cid = id || uid();
+  const st = {name: src ? src.name : '', phone: src ? src.phone || '' : '', address: src ? src.address || '' : '', note: src ? src.note || '' : '', confirm:false};
+  const used = id && D.sales.some(s => s.customerId === id);
+  const m = openModal({
+    state: st, title: () => id ? 'Edit customer' : 'Add customer',
+    body: () => `<div class="form">
+      <div class="field full"><label for="cf-name">Name</label><input id="cf-name" class="inp" value="${esc(st.name)}" data-bind="name" placeholder="Person or company"></div>
+      <div class="field"><label for="cf-phone">Phone</label><input id="cf-phone" class="inp" inputmode="tel" value="${esc(st.phone)}" data-bind="phone" placeholder="+224 …"></div>
+      <div class="field"><label for="cf-addr">Area / address</label><input id="cf-addr" class="inp" value="${esc(st.address)}" data-bind="address" placeholder="Kaloum, Ratoma…"></div>
+      <div class="field full"><label for="cf-note">Note</label><input id="cf-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="Plumber, contractor, credit limit…"></div></div>`,
+    foot: () => st.confirm ? confirmBar('Delete this customer?', 'del', 'Delete customer') : `${id && !used ? '<button type="button" class="btn ghost danger" data-act="askDel">Delete</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">${id ? 'Save' : 'Add customer'}</button>`,
+    acts: {
+      save: async () => {
+        const name = st.name.trim(); if (!name) return toast('Enter the customer’s name.');
+        const doc = {name, phone: st.phone.trim(), address: st.address.trim(), note: st.note.trim(), editedAt: nowIso()};
+        if (!src) doc.createdAt = nowIso();
+        if (await write([{col:'customers', id:cid, data:doc}], id ? 'Customer saved' : 'Customer added')){ m.close(); if (onSaved) onSaved(cid); }
+      },
+      askDel: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
+      del: async () => { if (await write([{col:'customers', id:cid, data:{deleted:true}}], 'Customer deleted')) closeAll(); }
+    }
+  });
+}
+function customerDetail(id){
+  const st = {pay: {amount:'', method:'Cash', date: todayStr(), note:''}, confirmPay:''};
+  const m = openModal({
+    state: st, live: true, wide: true,
+    title: () => (S.customers[id] || {}).name || 'Customer',
+    body: () => {
+      const k = S.customers[id]; if (!k) return `<p>This customer was deleted.</p>`;
+      const bal = D.custBal[id] || 0;
+      const inv = D.sales.filter(s => !s.void && s.customerId === id);
+      const pays = D.payments.filter(p => p.customerId === id);
+      const rows = [...inv.map(s => ({date: s.date, o: String(s.at || ''), kind:'inv', s})), ...pays.map(p => ({date: p.date, o: '~' + String(p.at || ''), kind:'pay', p}))]
+        .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.o.localeCompare(b.o));
+      let run = 0;
+      const lines = rows.map(r => {
+        if (r.kind === 'inv'){ run += r.s.total - r.s.paid; return `<tr tabindex="0" class="click" data-act="openSale" data-id="${r.s.id}"><td>${fdateShort(r.date)}</td><td><span class="mono">${invNoS(r.s)}</span><span class="sub">${r.s.paid ? `${money(r.s.paid)} paid at the counter` : 'On credit'}</span></td><td class="n">${money(r.s.total - r.s.paid)}</td><td class="n"></td><td class="n">${money(run)}</td><td></td></tr>`; }
+        const p = r.p; if (!p.void) run -= p.amount;
+        return `<tr class="${p.void ? 'void' : ''}"><td>${fdateShort(r.date)}</td><td>Payment · ${esc(p.method || '')}<span class="sub">${esc(p.note || '')}</span></td><td class="n"></td><td class="n">${money(p.amount)}</td><td class="n">${p.void ? '' : money(run)}</td><td class="n">${p.void ? '<span class="pill bad">Removed</span>' : st.confirmPay === p.id ? `<span class="inline"><button type="button" class="btn danger solid sm" data-act="voidPay" data-id="${p.id}">Remove</button><button type="button" class="btn ghost sm" data-act="keepPay">Keep</button></span>` : `<button type="button" class="btn ghost sm iconbtn" data-act="askPay" data-id="${p.id}" aria-label="Remove payment">${ic('x')}</button>`}</td></tr>`;
+      }).reverse().join('');
+      const unpaid = inv.filter(s => (D.invRemain[s.id] || 0) > 0.5);
+      return `<p class="sub">${esc([k.phone, k.address, k.note].filter(Boolean).join(' · ') || 'No contact details')}</p>
+        <section class="tiles">
+          ${tile('Bought in total', sum(inv, s => s.total), `${inv.length} invoice${inv.length === 1 ? '' : 's'}`)}
+          ${tile('Paid in total', sum(inv, s => s.paid) + sum(pays.filter(p => !p.void), p => p.amount), 'at the counter and later')}
+          ${tile(bal < -0.5 ? 'Credit in advance' : 'Owes you', Math.abs(bal), `${unpaid.length} unpaid invoice${unpaid.length === 1 ? '' : 's'}`, '', bal > 0.5 ? 'neg' : 'pos')}
+          ${tileRaw('Last purchase', `<span style="font-size:1.2rem">${inv[0] ? fdate(inv[0].date) : '—'}</span>`, k.phone ? esc(k.phone) : '&nbsp;')}
+        </section>
+        <div class="sect"><div class="sect-h"><h3>Receive a payment</h3>${bal > 0.5 ? `<span class="sub">Applied to the oldest unpaid invoice first</span>` : ''}</div>
+          <div class="form">
+            <div class="field"><label for="cp-amt">Amount (GNF)</label><input id="cp-amt" class="inp n" inputmode="decimal" value="${esc(st.pay.amount)}" data-bind="pay.amount" placeholder="${bal > 0.5 ? esc(String(Math.round(bal))) : '0'}"></div>
+            <div class="field"><label for="cp-method">Paid by</label><select id="cp-method" class="inp" data-bind="pay.method">${opts(METHODS, st.pay.method)}</select></div>
+            <div class="field"><label for="cp-date">Date</label><input id="cp-date" class="inp" type="date" value="${esc(st.pay.date)}" data-bind="pay.date"></div>
+            <div class="field"><label for="cp-note">Note</label><input id="cp-note" class="inp" value="${esc(st.pay.note)}" data-bind="pay.note" placeholder="Optional"></div>
+          </div>
+          <div class="inline"><button type="button" class="btn primary" data-act="recordPay">Record payment</button>${bal > 0.5 ? `<button type="button" class="btn ghost" data-act="payAll">Fill in full balance</button>` : ''}</div>
+        </div>
+        <div class="sect"><div class="sect-h"><h3>Statement</h3><span class="sub">Newest first</span></div>
+          ${rows.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Entry</th><th class="n">Credit given</th><th class="n">Paid</th><th class="n">Balance</th><th></th></tr></thead><tbody>${lines}</tbody></table></div>` : '<p class="sub">No invoices or payments yet.</p>'}
+        </div>`;
+    },
+    foot: () => `<button type="button" class="btn ghost" data-act="edit">Edit details</button><span class="spacer"></span><button type="button" class="btn" data-act="sellTo">${ic('cart')}New sale</button><button type="button" class="btn primary" data-close>Done</button>`,
+    acts: {
+      edit: () => customerForm(id),
+      sellTo: () => { UI.cart.customerId = id; saveDraft(); closeAll(); if (UI.view === 'sell') renderView(); else location.hash = '#sell'; },
+      payAll: () => { st.pay.amount = String(Math.round(D.custBal[id] || 0)); m.render(); },
+      recordPay: async () => {
+        const a = num(st.pay.amount); if (!(a > 0)) return toast('Enter the amount received.');
+        if (await write([{col:'payments', id:uid(), merge:false, data:{date: st.pay.date || todayStr(), customerId: id, amount: a, method: st.pay.method, note: st.pay.note.trim(), by: S.email, at: nowIso()}}], `Payment of ${money(a)} GNF recorded`)){ st.pay = {amount:'', method: st.pay.method, date: todayStr(), note:''}; m.render(); }
+      },
+      askPay: el => { st.confirmPay = el.dataset.id; m.render(); }, keepPay: () => { st.confirmPay = ''; m.render(); },
+      voidPay: async el => { if (await write([{col:'payments', id:el.dataset.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Payment removed')){ st.confirmPay = ''; m.render(); } }
+    }
+  });
+}
+
+/* ----- supplier ----- */
+function supplierForm(id, onSaved){
+  const src = id ? S.suppliers[id] : null; const sid = id || uid();
+  const st = {name: src ? src.name : '', phone: src ? src.phone || '' : '', kind: src ? src.kind || 'market' : 'market', location: src ? src.location || '' : '', note: src ? src.note || '' : '', confirm:false};
+  const used = id && Object.values(S.purchases).some(p => p.supplierId === id);
+  const m = openModal({
+    state: st, title: () => id ? 'Edit supplier' : 'Add supplier',
+    body: () => `<div class="form">
+      <div class="field full"><label for="sf-name">Name</label><input id="sf-name" class="inp" value="${esc(st.name)}" data-bind="name" placeholder="Wholesaler or factory"></div>
+      <div class="field full"><span class="lbl">Where you buy from them</span><div class="seg" role="group">${[['market', 'Local market'], ['import', 'Import'], ['both', 'Both']].map(([v, l]) => `<button type="button" data-act="kind" data-v="${v}" aria-pressed="${st.kind === v}">${l}</button>`).join('')}</div></div>
+      <div class="field"><label for="sf-phone">Phone / WhatsApp</label><input id="sf-phone" class="inp" value="${esc(st.phone)}" data-bind="phone"></div>
+      <div class="field"><label for="sf-loc">Location</label><input id="sf-loc" class="inp" value="${esc(st.location)}" data-bind="location" placeholder="Madina, Guangzhou, Dubai…"></div>
+      <div class="field full"><label for="sf-note">Note</label><input id="sf-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="What you buy, payment terms…"></div></div>`,
+    foot: () => st.confirm ? confirmBar('Delete this supplier?', 'del', 'Delete supplier') : `${id && !used ? '<button type="button" class="btn ghost danger" data-act="askDel">Delete</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">${id ? 'Save' : 'Add supplier'}</button>`,
+    acts: {
+      kind: el => { st.kind = el.dataset.v; m.render(); },
+      save: async () => {
+        const name = st.name.trim(); if (!name) return toast('Enter the supplier’s name.');
+        const doc = {name, phone: st.phone.trim(), kind: st.kind, location: st.location.trim(), note: st.note.trim(), editedAt: nowIso()};
+        if (await write([{col:'suppliers', id:sid, data:doc}], id ? 'Supplier saved' : 'Supplier added')){ m.close(); if (onSaved) onSaved(sid); }
+      },
+      askDel: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
+      del: async () => { if (await write([{col:'suppliers', id:sid, data:{deleted:true}}], 'Supplier deleted')) closeAll(); }
+    }
+  });
+}
+function supplierDetail(id){
+  const st = {pay: {purchaseId:'', amount:'', method:'Cash', date: todayStr(), note:''}};
+  const m = openModal({
+    state: st, live: true, wide: true,
+    title: () => (S.suppliers[id] || {}).name || 'Supplier',
+    body: () => {
+      const k = S.suppliers[id]; if (!k) return '<p>This supplier was deleted.</p>';
+      const ps = Object.entries(S.purchases).filter(([, p]) => p.supplierId === id).sort((a, b) => String(b[1].date).localeCompare(String(a[1].date)));
+      const open = ps.filter(([pid]) => D.pc[pid].balance > 0.5);
+      if (!open.some(([pid]) => pid === st.pay.purchaseId)) st.pay.purchaseId = open.length ? open[open.length - 1][0] : '';
+      const bal = D.supBal[id] || 0;
+      return `<p class="sub">${esc([k.kind === 'import' ? 'Import supplier' : k.kind === 'both' ? 'Market & import' : 'Market supplier', k.phone, k.location, k.note].filter(Boolean).join(' · '))}</p>
+        <section class="tiles">
+          ${tile('Bought in total', sum(ps, ([pid]) => D.pc[pid].goods), `${ps.length} purchase${ps.length === 1 ? '' : 's'}, goods only`)}
+          ${tile('Paid', sum(ps, ([pid]) => D.pc[pid].paid), 'to this supplier')}
+          ${tile('You owe', Math.max(0, bal), `${open.length} unpaid purchase${open.length === 1 ? '' : 's'}`, '', bal > 0.5 ? 'neg' : 'pos')}
+          ${tile('Extra costs', sum(ps, ([pid]) => D.pc[pid].extras), 'freight, customs, transport')}
+        </section>
+        ${open.length ? `<div class="sect"><h3>Pay this supplier</h3><div class="form">
+          <div class="field"><label for="sp-p">For purchase</label><select id="sp-p" class="inp" data-bind="pay.purchaseId">${open.map(([pid, p]) => opt(pid, `${p.ref || fdate(p.date)} · owes ${money(D.pc[pid].balance)}`, pid === st.pay.purchaseId)).join('')}</select></div>
+          <div class="field"><label for="sp-a">Amount (GNF)</label><input id="sp-a" class="inp n" inputmode="decimal" value="${esc(st.pay.amount)}" data-bind="pay.amount" placeholder="0"></div>
+          <div class="field"><label for="sp-m">Paid by</label><select id="sp-m" class="inp" data-bind="pay.method">${opts(METHODS, st.pay.method)}</select></div>
+          <div class="field"><label for="sp-d">Date</label><input id="sp-d" class="inp" type="date" value="${esc(st.pay.date)}" data-bind="pay.date"></div>
+        </div><div><button type="button" class="btn primary" data-act="pay">Record payment</button></div></div>` : ''}
+        <div class="sect"><h3>Purchases</h3>${ps.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Reference</th><th>Status</th><th class="n">Goods GNF</th><th class="n">Still owed</th></tr></thead><tbody>${ps.map(([pid, p]) => `<tr tabindex="0" class="click" data-act="openPurchase" data-id="${pid}"><td>${fdateShort(p.date)}</td><td>${esc(p.ref || (p.kind === 'import' ? 'Import' : 'Market purchase'))}</td><td>${p.status === 'received' ? '<span class="pill good">Received</span>' : '<span class="pill warn">In transit</span>'}</td><td class="n">${money(D.pc[pid].goods)}</td><td class="n">${D.pc[pid].balance > 0.5 ? money(D.pc[pid].balance) : '<span class="pill good">Paid</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="sub">No purchases from this supplier yet.</p>'}</div>`;
+    },
+    foot: () => `<button type="button" class="btn ghost" data-act="edit">Edit details</button><span class="spacer"></span><button type="button" class="btn" data-act="buy">${ic('plus')}New purchase</button><button type="button" class="btn primary" data-close>Done</button>`,
+    acts: {
+      edit: () => supplierForm(id),
+      buy: () => purchaseEditor(null, (S.suppliers[id] || {}).kind === 'import' ? 'import' : 'market', id),
+      pay: async () => {
+        const pid = st.pay.purchaseId, a = num(st.pay.amount);
+        if (!pid) return toast('Pick the purchase you are paying for.');
+        if (!(a > 0)) return toast('Enter the amount paid.');
+        if (await write([{col:'purchases', id:pid, data:{payments: {[uid()]: {amount: a, method: st.pay.method, date: st.pay.date || todayStr(), note: st.pay.note.trim(), by: S.email, at: nowIso()}}}}], `Payment of ${money(a)} GNF recorded`)){ st.pay = {purchaseId:'', amount:'', method: st.pay.method, date: todayStr(), note:''}; m.render(); }
+      }
+    }
+  });
+}
+
+/* ----- purchase / import editor ----- */
+function purchaseEditor(id, kind = 'market', supplierId = ''){
+  const src = id ? S.purchases[id] : null; const pid = id || uid();
+  const blankPay = () => ({amount:'', method:'Cash', date: todayStr(), note:''});
+  const st = src ? {
+    date: src.date || todayStr(), ref: src.ref || '', supplierId: src.supplierId || '', kind: src.kind || 'market', currency: src.currency || 'GNF', rate: src.rate && src.currency !== 'GNF' ? String(src.rate) : '', status: src.status || 'received', receivedDate: src.receivedDate || '', note: src.note || '',
+    lines: (src.lines || []).map(l => ({productId: l.productId, label: prodLabel(l.productId) || 'Removed product', qty: String(l.qty ?? ''), price: String(l.price ?? '')})),
+    extras: (src.extras || []).map(x => ({label: x.label || '', amount: String(x.amount ?? '')})),
+    payments: {...(src.payments || {})}, pay: blankPay(), confirm:false
+  } : {
+    date: todayStr(), ref:'', supplierId, kind, currency: kind === 'import' ? 'USD' : 'GNF', rate:'', status: kind === 'import' ? 'ordered' : 'received', receivedDate:'', note:'',
+    lines: [{productId:'', label:'', qty:'', price:''}], extras: kind === 'import' ? IMPORT_EXTRAS.map(l => ({label:l, amount:''})) : [], payments:{}, pay: blankPay(), confirm:false
+  };
+  const calc = () => purchaseCalc({currency: st.currency, rate: st.rate, lines: st.lines.map(l => ({productId: l.productId, qty: l.qty, price: l.price})), extras: st.extras, payments: st.payments});
+  const m = openModal({
+    state: st, wide: true, live: true,
+    title: () => id ? `${st.kind === 'import' ? 'Import' : 'Market purchase'}${st.ref ? ' · ' + st.ref : ''}` : (st.kind === 'import' ? 'New import' : 'New market purchase'),
+    body: () => {
+      const c = calc(); const cur = st.currency; const fx = cur !== 'GNF';
+      const sups = sortedBy(S.suppliers);
+      const defaults = (st.kind === 'import' ? IMPORT_EXTRAS : MARKET_EXTRAS).filter(l => !st.extras.some(x => x.label === l));
+      const pays = Object.entries(st.payments).filter(([, p]) => p && !p.void).sort((a, b) => String(a[1].date).localeCompare(String(b[1].date)));
+      return `<div class="form">
+          <div class="field"><span class="lbl">Type</span><div class="seg" role="group">${[['market', 'Market'], ['import', 'Import']].map(([v, l]) => `<button type="button" data-act="setKind" data-v="${v}" aria-pressed="${st.kind === v}">${l}</button>`).join('')}</div></div>
+          <div class="field"><span class="lbl">Status</span><div class="seg" role="group">${[['ordered', 'In transit'], ['received', 'Received']].map(([v, l]) => `<button type="button" data-act="setStatus" data-v="${v}" aria-pressed="${st.status === v}">${l}</button>`).join('')}</div></div>
+          <div class="field"><label for="pe-sup">Supplier</label><select id="pe-sup" class="inp" data-bind="supplierId">${opt('', 'No supplier', !st.supplierId)}${sups.map(([k, v]) => opt(k, v.name, k === st.supplierId)).join('')}</select><button type="button" class="btn ghost sm" data-act="newSup" style="align-self:flex-start">${ic('plus')}New supplier</button></div>
+          <div class="field"><label for="pe-ref">${st.kind === 'import' ? 'Reference (invoice, BL or container no.)' : 'Reference'}</label><input id="pe-ref" class="inp" value="${esc(st.ref)}" data-bind="ref" placeholder="${st.kind === 'import' ? 'e.g. MSKU 123456-7' : 'Optional'}"></div>
+          <div class="field"><label for="pe-date">${st.kind === 'import' ? 'Order date' : 'Date'}</label><input id="pe-date" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
+          ${st.status === 'received' && st.kind === 'import' ? `<div class="field"><label for="pe-rdate">Received on</label><input id="pe-rdate" class="inp" type="date" value="${esc(st.receivedDate)}" data-bind="receivedDate"></div>` : ''}
+          <div class="field"><label for="pe-cur">Currency of supplier prices</label><select id="pe-cur" class="inp" data-bind="currency" data-rr>${opts(CURRENCIES, cur)}</select></div>
+          ${fx ? `<div class="field"><label for="pe-rate">Exchange rate: GNF for 1 ${esc(cur)}</label><input id="pe-rate" class="inp n" inputmode="decimal" value="${esc(st.rate)}" data-bind="rate" data-rr placeholder="${cur === 'USD' ? 'e.g. 8650' : cur === 'EUR' ? 'e.g. 10000' : cur === 'CNY' ? 'e.g. 1200' : 'e.g. 2350'}"><span class="hint">Use the rate you actually paid</span></div>` : ''}
+        </div>
+        ${st.status === 'ordered' ? `<p class="banner info" style="padding:9px 12px"><span class="sub">In-transit goods are not counted in stock. Switch to <b>Received</b> when they arrive at the shop.</span></p>` : ''}
+
+        <div class="sect"><div class="sect-h"><h3>Products</h3><span class="inline"><button type="button" class="btn sm" data-act="addLine">${ic('plus')}Add line</button><button type="button" class="btn sm" data-act="newProd">${ic('plus')}New product</button></span></div>
+          <datalist id="pe-prods">${sortedBy(S.products).filter(([, p]) => p.active !== false).map(([k]) => `<option value="${esc(prodLabel(k))}">`).join('')}</datalist>
+          <div class="scroll"><table class="tbl"><thead><tr><th style="min-width:200px">Product</th><th class="n">Qty</th><th class="n">Unit price ${esc(cur)}</th><th class="n">Goods GNF</th><th class="n">+ Extra costs</th><th class="n">Landed per unit</th><th class="n">Sale price · margin</th><th></th></tr></thead><tbody>
+          ${st.lines.map((l, i) => { const cl = c.lines[i]; const p = S.products[l.productId]; const mg = p && +p.price > 0 && cl.unit > 0 ? (p.price - cl.unit) / p.price : null;
+            return `<tr><td><input id="pl-${i}" class="inp${l.label && !l.productId ? ' bad' : ''}" list="pe-prods" value="${esc(l.label)}" data-in="lineProd" data-i="${i}" placeholder="Type to pick a product" autocomplete="off" aria-label="Product"></td>
+              <td><input id="pq-${i}" class="inp n" style="width:76px" inputmode="decimal" value="${esc(l.qty)}" data-bind="lines.${i}.qty" data-rr aria-label="Quantity"></td>
+              <td><input id="pp-${i}" class="inp n" style="width:110px" inputmode="decimal" value="${esc(l.price)}" data-bind="lines.${i}.price" data-rr aria-label="Unit price"></td>
+              <td class="n">${money(cl.goods)}</td><td class="n">${money(cl.extra)}</td><td class="n"><b>${cl.unit ? money(cl.unit) : '—'}</b></td>
+              <td class="n">${p && +p.price ? `${money(p.price)}<span class="sub ${mg != null && mg < 0 ? 'errline' : ''}">${mg == null ? '' : pct(mg)}</span>` : '<span class="sub">no price</span>'}</td>
+              <td><button type="button" class="btn ghost sm iconbtn" data-act="rmLine" data-i="${i}" aria-label="Remove line">${ic('x')}</button></td></tr>`; }).join('')}
+          </tbody></table></div>
+          ${st.lines.some(l => l.label && !l.productId) ? `<p class="errline">Lines in red aren’t in your product list. Pick from the suggestions or use New product.</p>` : ''}
+        </div>
+
+        <div class="sect"><div class="sect-h"><h3>Extra costs (GNF)</h3><span class="sub">Shared across the lines by value, to get the landed cost</span></div>
+          <datalist id="pe-xl">${[...IMPORT_EXTRAS, ...MARKET_EXTRAS].map(l => `<option value="${esc(l)}">`).join('')}</datalist>
+          ${st.extras.map((x, i) => `<div class="inline"><input id="xl-${i}" class="inp grow" list="pe-xl" value="${esc(x.label)}" data-bind="extras.${i}.label" aria-label="Cost name"><input id="xa-${i}" class="inp n" style="width:150px" inputmode="decimal" value="${esc(x.amount)}" data-bind="extras.${i}.amount" data-rr placeholder="0" aria-label="Amount in GNF"><button type="button" class="btn ghost sm iconbtn" data-act="rmExtra" data-i="${i}" aria-label="Remove cost">${ic('x')}</button></div>`).join('')}
+          <div class="chips"><button type="button" class="chip" data-act="addExtra" data-v="">+ Other cost</button>${defaults.map(l => `<button type="button" class="chip" data-act="addExtra" data-v="${esc(l)}">+ ${esc(l)}</button>`).join('')}</div>
+        </div>
+
+        <div class="grid2">
+          <div class="totals panel panel-b">
+            <div class="row"><span class="muted">Goods${fx ? ` (${money(sum(c.lines, l => l.qty * l.price))} ${esc(cur)})` : ''}</span><span>${money(c.goods)}</span></div>
+            <div class="row"><span class="muted">Extra costs${c.goods ? ` · ${pct(c.extras / c.goods)} of goods` : ''}</span><span>${money(c.extras)}</span></div>
+            <div class="row grand"><span>Landed cost</span><span>${money(c.landed)} <small class="sub">GNF</small></span></div>
+          </div>
+          <div class="panel panel-b stack">
+            <div class="sect-h"><h3>Paid to supplier</h3><span class="sub">${c.balance > 0.5 ? `<b>${money(c.balance)}</b> still owed` : c.goods ? 'Fully paid' : ''}</span></div>
+            ${pays.length ? `<div class="bars">${pays.map(([, p]) => `<div class="totals"><div class="row"><span>${fdateShort(p.date)} · ${esc(p.method || '')}</span><span>${money(p.amount)}</span></div></div>`).join('')}</div>` : ''}
+            <div class="inline"><input id="pay-a" class="inp n grow" inputmode="decimal" value="${esc(st.pay.amount)}" data-bind="pay.amount" placeholder="Amount GNF" aria-label="Payment amount"><select id="pay-m" class="inp" style="width:auto" data-bind="pay.method" aria-label="Paid by">${opts(METHODS, st.pay.method)}</select><button type="button" class="btn" data-act="addPay">Add payment</button></div>
+            ${c.goods > 0 && !pays.length ? `<button type="button" class="btn ghost sm" style="align-self:flex-start" data-act="paidFull">Mark goods as fully paid</button>` : ''}
+          </div>
+        </div>
+        <div class="field"><label for="pe-note">Note</label><input id="pe-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="Shipping line, transit agent, arrival date…"></div>`;
+    },
+    foot: () => st.confirm ? confirmBar('Delete this purchase? Its goods come off stock and the supplier balance.', 'del', 'Delete purchase') :
+      `${id ? '<button type="button" class="btn ghost danger" data-act="askDel">Delete</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">${id ? 'Save purchase' : 'Record purchase'}</button>`,
+    ins: {
+      lineProd: (el) => { const i = +el.dataset.i, l = st.lines[i]; l.label = el.value; const pid2 = findProdByLabel(el.value); if (pid2 !== l.productId){ l.productId = pid2; if (pid2 && !l.price && st.currency === 'GNF' && S.products[pid2] && +S.products[pid2].cost) l.price = String(S.products[pid2].cost); m.render(); } }
+    },
+    acts: {
+      setKind: el => {
+        st.kind = el.dataset.v;
+        if (!id && !st.extras.some(x => num(x.amount))){
+          st.extras = st.kind === 'import' ? IMPORT_EXTRAS.map(l => ({label:l, amount:''})) : [];
+          if (!st.lines.some(l => l.price)) st.currency = st.kind === 'import' ? 'USD' : 'GNF';
+          st.status = st.kind === 'import' ? 'ordered' : 'received';
+        }
+        m.render();
+      },
+      setStatus: el => { st.status = el.dataset.v; if (st.status === 'received' && !st.receivedDate) st.receivedDate = todayStr(); m.render(); },
+      newSup: () => supplierForm(null, sid => { st.supplierId = sid; m.render(); }),
+      addLine: () => { st.lines.push({productId:'', label:'', qty:'', price:''}); m.render(); const n = document.getElementById('pl-' + (st.lines.length - 1)); if (n) n.focus(); },
+      rmLine: el => { st.lines.splice(+el.dataset.i, 1); if (!st.lines.length) st.lines.push({productId:'', label:'', qty:'', price:''}); m.render(); },
+      newProd: () => productModal(null, {onSaved: (newId, doc) => { const empty = st.lines.find(l => !l.productId && !l.label); const line = {productId: newId, label: prodLabel(newId, doc), qty:'', price: st.currency === 'GNF' && doc.cost ? String(doc.cost) : ''}; if (empty) Object.assign(empty, line); else st.lines.push(line); m.render(); }}),
+      addExtra: el => { st.extras.push({label: el.dataset.v || '', amount:''}); m.render(); const n = document.getElementById('xa-' + (st.extras.length - 1)); if (n) n.focus(); },
+      rmExtra: el => { st.extras.splice(+el.dataset.i, 1); m.render(); },
+      paidFull: () => { st.pay.amount = String(Math.round(calc().balance)); m.render(); },
+      addPay: async () => {
+        const a = num(st.pay.amount); if (!(a > 0)) return toast('Enter the amount paid to the supplier.');
+        const payId = uid(); const pay = {amount: a, method: st.pay.method, date: todayStr(), note:'', by: S.email, at: nowIso()};
+        if (id){ if (!(await write([{col:'purchases', id:pid, data:{payments: {[payId]: pay}}}], 'Payment recorded'))) return; }
+        else toast('Payment added. It is saved when you record the purchase.');
+        st.payments[payId] = pay; st.pay = blankPay(); m.render();
+      },
+      askDel: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
+      del: async () => { if (await write([{col:'purchases', id:pid, data:{deleted:true}}], 'Purchase deleted')) m.close(); },
+      save: async () => {
+        const lines = st.lines.filter(l => l.productId || l.label.trim() || l.qty || l.price);
+        if (!lines.length) return toast('Add at least one product line.');
+        for (const l of lines){
+          if (!l.productId) return toast(`“${l.label || 'A line'}” isn’t in your product list. Pick it from the suggestions or use New product.`);
+          if (!(num(l.qty) > 0)) return toast(`Enter a quantity for ${prodName(l.productId)}.`);
+          if (isNaN(parseNum(l.price || '0')) || num(l.price) < 0) return toast(`Check the price of ${prodName(l.productId)}.`);
+        }
+        if (st.currency !== 'GNF' && !(num(st.rate) > 0)) return toast(`Enter the exchange rate: how many GNF for 1 ${st.currency}.`);
+        const payments = {...((S.purchases[pid] || {}).payments || {}), ...st.payments};
+        const doc = {date: st.date || todayStr(), ref: st.ref.trim(), supplierId: st.supplierId || null, kind: st.kind, currency: st.currency, rate: st.currency === 'GNF' ? 1 : num(st.rate),
+          status: st.status, receivedDate: st.status === 'received' ? (st.kind === 'import' ? (st.receivedDate || todayStr()) : (st.date || todayStr())) : '',
+          lines: lines.map(l => ({productId: l.productId, qty: num(l.qty), price: num(l.price)})),
+          extras: st.extras.filter(x => x.label.trim() || num(x.amount)).map(x => ({label: x.label.trim() || 'Other cost', amount: num(x.amount)})),
+          payments, note: st.note.trim(), by: (src && src.by) || S.email, createdAt: (src && src.createdAt) || nowIso(), editedAt: nowIso()};
+        if (await write([{col:'purchases', id:pid, data:doc, merge:false}], id ? 'Purchase saved' : (st.status === 'received' ? 'Purchase recorded and added to stock' : 'Import recorded as in transit'))) m.close();
+      }
+    }
+  });
+}
+
+/* ----- invoice ----- */
+function invoiceText(s){
+  const L = [shopName(), [S.settings.address, S.settings.phone].filter(Boolean).join(' · '), '', `Invoice ${invNoS(s)} · ${fdate(s.date)}`, `Customer: ${custName(s)}`, ''];
+  s.items.forEach(i => L.push(`${qtyFmt(i.qty)} × ${i.name} @ ${money(i.price)} = ${money(i.qty * i.price)}`));
+  L.push('');
+  if (s.discount) L.push(`Discount: −${money(s.discount)}`);
+  L.push(`TOTAL: ${money(s.total)} GNF`, `Paid: ${money(s.paid)} GNF (${s.method || 'Cash'})`);
+  if (s.total - s.paid > 0.5) L.push(`Balance due: ${money(s.total - s.paid)} GNF`);
+  if (S.settings.footer) L.push('', S.settings.footer);
+  return L.filter((x, i, a) => !(x === '' && a[i - 1] === '')).join('\n');
+}
+function invoiceModal(saleId){
+  const st = {confirm:false, showText:false};
+  const find = () => D.sales.find(s => s.id === saleId);
+  const m = openModal({
+    state: st, live: true,
+    title: () => { const s = find(); return s ? `Invoice ${invNoS(s)}` : 'Invoice'; },
+    body: () => {
+      const s = find(); if (!s) return `<p class="sub">This invoice isn’t available.</p>`;
+      const k = s.customerId ? S.customers[s.customerId] : null;
+      const rem = D.invRemain[s.id] || 0;
+      return `<div class="inv">
+        <div class="inv-head"><div><div class="inv-shop">${esc(shopName())}</div><div class="sub">${esc([S.settings.address, S.settings.phone].filter(Boolean).join(' · ') || 'Add your address and phone in Shop settings')}</div></div>
+          <div class="inv-meta"><div class="mono">${invNoS(s)}</div><div class="sub">${fdate(s.date)}${s.at ? ' · ' + timeOf(s.at) : ''}</div></div></div>
+        <div><span class="lbl">Billed to</span><div><b>${esc(custName(s))}</b>${k && k.phone ? ` <span class="sub">· ${esc(k.phone)}</span>` : ''}</div></div>
+        <div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${s.items.map(i => `<tr><td>${esc(i.name)}</td><td class="n">${qtyFmt(i.qty)}</td><td class="n">${money(i.price)}</td><td class="n">${money(i.qty * i.price)}</td></tr>`).join('')}</tbody></table></div>
+        <div class="totals">
+          ${s.discount ? `<div class="row"><span class="muted">Subtotal</span><span>${money(s.subtotal)}</span></div><div class="row"><span class="muted">Discount</span><span>−${money(s.discount)}</span></div>` : ''}
+          <div class="row grand"><span>Total</span><span>${money(s.total)} <small class="sub">GNF</small></span></div>
+          <div class="row"><span class="muted">Paid at the counter · ${esc(s.method || 'Cash')}</span><span>${money(s.paid)}</span></div>
+          ${s.total - s.paid > 0.5 ? `<div class="row"><span class="muted">Given on credit</span><span>${money(s.total - s.paid)}</span></div><div class="row"><b>Still owed on this invoice</b><b>${rem > 0.5 ? money(rem) + ' GNF' : 'Settled'}</b></div>` : ''}
+        </div>
+        ${s.note ? `<p class="sub">Note: ${esc(s.note)}</p>` : ''}
+        ${S.settings.footer ? `<p class="sub" style="text-align:center">${esc(S.settings.footer)}</p>` : ''}
+        <p class="hint">Served by ${esc(staffName(s.by))}</p>
+        ${s.void ? '<div class="stamp">VOID</div>' : ''}
+      </div>
+      ${st.showText ? `<div class="field noprint"><label for="inv-text">Copy this text into WhatsApp or SMS</label><textarea id="inv-text" class="inp copytext" readonly>${esc(invoiceText(s))}</textarea></div>` : ''}`;
+    },
+    foot: () => { const s = find(); if (!s) return '';
+      if (st.confirm) return confirmBar('Void this sale? Its items go back into stock and any credit is cancelled.', 'voidYes', 'Void sale');
+      return `${s.void ? '' : '<button type="button" class="btn ghost danger" data-act="voidAsk">Void sale</button>'}<span class="spacer"></span>${s.customerId ? `<button type="button" class="btn" data-act="toCustomer">Customer account</button>` : ''}<button type="button" class="btn" data-act="copy">${ic('copy')}Copy as text</button><button type="button" class="btn" data-act="print">${ic('printer')}Print</button><button type="button" class="btn primary" data-close>Done</button>`; },
+    acts: {
+      copy: () => { const s = find(); if (!s) return; const txt = invoiceText(s);
+        const fallback = () => { st.showText = true; m.render(); const t = document.getElementById('inv-text'); if (t){ t.focus(); t.select(); } };
+        try { navigator.clipboard.writeText(txt).then(() => toast('Invoice copied. Paste it into WhatsApp or SMS.'), fallback); } catch { fallback(); } },
+      print: () => { try { window.print(); } catch { toast('Printing isn’t available in this browser.'); } },
+      toCustomer: () => { const s = find(); if (s && s.customerId){ m.close(); customerDetail(s.customerId); } },
+      voidAsk: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
+      voidYes: async () => { const s = find(); if (!s) return; if (await write([{col:'sales', id:s.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Sale voided')){ st.confirm = false; m.render(); } }
+    }
+  });
+}
+
+/* ----- team member ----- */
+function memberModal(email){
+  const src = S.members[email] || {};
+  const st = {name: src.name || '', code: (src.code || '').toUpperCase(), active: src.active !== false, confirm:false};
+  const isOwnerRow = src.role === 'owner' || OWNERS.includes(email);
+  const m = openModal({
+    state: st, title: () => src.name || email,
+    body: () => `<p class="sub">${esc(email)}</p><div class="form">
+      <div class="field"><label for="mm-name">Name</label><input id="mm-name" class="inp" value="${esc(st.name)}" data-bind="name"></div>
+      <div class="field"><label for="mm-code">Invoice letter</label><input id="mm-code" class="inp" maxlength="2" value="${esc(st.code)}" data-bind="code"></div></div>
+      ${isOwnerRow ? '<p class="hint">Owners can’t be removed here. To change who owns the shop, change the owner emails in config.js and in the security rules.</p>' : ''}`,
+    foot: () => st.confirm ? confirmBar('Remove this person? They lose access right away. Their past sales stay.', 'remove', 'Remove access') :
+      `${!isOwnerRow ? (st.active ? '<button type="button" class="btn ghost danger" data-act="askRemove">Remove access</button>' : '<button type="button" class="btn ghost" data-act="restore">Give access again</button>') : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Save</button>`,
+    acts: {
+      save: async () => {
+        const code = st.code.trim().toUpperCase();
+        if (!/^[A-Z]{1,2}$/.test(code)) return toast('Use one or two letters for the invoice series.');
+        if (usedCodes(email).has(code)) return toast(`Letter ${code} is already used by someone else.`);
+        if (await write([{col:'members', id:email, data:{name: st.name.trim(), code}}], 'Saved')) m.close();
+      },
+      askRemove: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
+      remove: async () => { if (await write([{col:'members', id:email, data:{active:false, removedAt: nowIso()}}], 'Access removed')) m.close(); },
+      restore: async () => { if (await write([{col:'members', id:email, data:{active:true}}], 'Access restored')) m.close(); }
+    }
+  });
+}
+
+/* ================= import from the Claude version ================= */
+function importClaude(json){
+  if (!json || typeof json !== 'object' || !json.products || !json.journal) throw new Error('format');
+  const ops = [];
+  const clean = (o) => { const c = {...o}; delete c.updatedAt; if (typeof c.by === 'string' && c.by.startsWith('u_')) c.by = 'imported'; if (c.voidBy && String(c.voidBy).startsWith('u_')) c.voidBy = 'imported'; return c; };
+  if (json.settings && Object.keys(json.settings).length) ops.push({col:'config', id:'settings', data: clean(json.settings)});
+  for (const col of ['products','customers','suppliers','purchases','adjustments']){
+    for (const [id, v] of Object.entries(json[col] || {})){
+      if (!v) continue;
+      const d = clean(v);
+      if (col === 'purchases' && d.payments) for (const k of Object.keys(d.payments)) d.payments[k] = clean(d.payments[k] || {});
+      ops.push({col, id, data: d, merge:false});
+    }
+  }
+  let nSales = 0, nPay = 0, nExp = 0;
+  for (const [key, day] of Object.entries(json.journal || {})){
+    if (!day) continue; const date = day.date || key;
+    for (const [id, s] of Object.entries(day.sales || {})){ if (!s) continue; ops.push({col:'sales', id, merge:false, data:{...clean(s), date, series: s.series || 'A'}}); nSales++; }
+    for (const [id, p] of Object.entries(day.payments || {})){ if (!p) continue; ops.push({col:'payments', id, merge:false, data:{...clean(p), date}}); nPay++; }
+    for (const [id, e] of Object.entries(day.expenses || {})){ if (!e) continue; ops.push({col:'expenses', id, merge:false, data:{...clean(e), date}}); nExp++; }
+  }
+  const n = c => Object.keys(json[c] || {}).length;
+  return {ops, summary: `${n('products')} products, ${n('customers')} customers, ${n('suppliers')} suppliers, ${n('purchases')} purchases, ${nSales} sales, ${nPay} payments, ${nExp} expenses`};
+}
+
+/* ================= files ================= */
+function saveFile(filename, data, type){
+  try {
+    const blob = new Blob([data], {type});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch { toast('Couldn’t prepare the file.'); }
+}
+function toCsv(rows){ return '﻿' + rows.map(r => r.map(v => { const s = String(v ?? ''); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\r\n'); }
+const jsonReplacer = (k, v) => (v && typeof v === 'object' && typeof v.toDate === 'function') ? v.toDate().toISOString() : v;
+
+/* ================= actions ================= */
+const ACT = {
+  more: () => moreSheet(),
+  go: el => { closeAll(); location.hash = '#' + el.dataset.to; },
+  reload: () => location.reload(),
+  google: () => googleSignIn(),
+  gateMode: el => { UI.gate.mode = el.dataset.v; UI.gate.err = ''; UI.gate.note = ''; renderGate(); },
+  resetPw: async () => {
+    const g = UI.gate; g.err = ''; g.note = '';
+    if (!g.email.trim()){ g.err = 'Type your email first, then tap Forgot password.'; renderGate(); return; }
+    try { await F.sendPasswordResetEmail(S.authObj, g.email.trim()); g.note = 'We sent a link to reset your password. Check your email, including spam.'; }
+    catch (e){ g.err = authErr(e); }
+    renderGate();
+  },
+  verified: async () => {
+    const g = UI.gate; g.err = ''; g.note = '';
+    try {
+      await S.user.reload();
+      if (S.authObj.currentUser && S.authObj.currentUser.emailVerified){ await S.authObj.currentUser.getIdToken(true); S.auth = 'ready'; renderAll(); startSync(); return; }
+      g.err = 'Not confirmed yet. Open the link in the email first.';
+    } catch (e){ g.err = authErr(e); }
+    renderGate();
+  },
+  resendVerify: async () => { const g = UI.gate; g.err = ''; try { await F.sendEmailVerification(S.user); g.note = 'Sent. Check your email, including spam.'; } catch (e){ g.err = authErr(e); } renderGate(); },
+  signOut: () => {
+    if (S.unsynced && S.auth === 'ready'){
+      const mm = openModal({title: () => 'Sign out?', body: () => `<p>Some changes on this device haven’t uploaded yet. If you sign out now, they may be lost. Connect to the internet and wait for “All changes saved” first.</p>`,
+        foot: () => `<button type="button" class="btn" data-close>Stay signed in</button><button type="button" class="btn danger solid" data-act="forceOut">Sign out anyway</button>`,
+        acts: {forceOut: async () => { mm.close(); await F.signOut(S.authObj); location.reload(); }}});
+      return;
+    }
+    F.signOut(S.authObj).then(() => location.reload());
+  },
+  install: async () => { const e = S.installEvt; if (!e) return; S.installEvt = null; try { e.prompt(); await e.userChoice; } catch {} renderView(); },
+  copyLink: () => { const link = location.origin + location.pathname; try { navigator.clipboard.writeText(link).then(() => toast('Link copied'), () => toast(link)); } catch { toast(link); } },
+  newProduct: () => productModal(null),
+  openProduct: el => productModal(el.dataset.id),
+  adjustStock: () => adjustModal(''),
+  stockCat: el => { UI.stockCat = el.dataset.v; renderView(); },
+  stockLow: () => { UI.stockLow = !UI.stockLow; renderView(); },
+  stockHidden: () => { UI.stockHidden = !UI.stockHidden; renderView(); },
+  newPurchase: el => purchaseEditor(null, el.dataset.kind),
+  openPurchase: el => purchaseEditor(el.dataset.id),
+  purchStatus: el => { UI.purchStatus = el.dataset.v; renderView(); },
+  newCustomer: () => customerForm(null, id => customerDetail(id)),
+  openCustomer: el => customerDetail(el.dataset.id),
+  newSupplier: () => supplierForm(null),
+  openSupplier: el => supplierDetail(el.dataset.id),
+  openSale: el => invoiceModal(el.dataset.id),
+  editMember: el => memberModal(el.dataset.id),
+  addMember: async () => {
+    const t = UI.team; const email = t.email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast('Enter a valid email address.');
+    const used = usedCodes(email);
+    const code = (t.code.trim() || LETTERS.find(l => !used.has(l)) || '').toUpperCase();
+    if (!/^[A-Z]{1,2}$/.test(code)) return toast('Use one or two letters for the invoice series.');
+    const ex = S.members[email];
+    if (used.has(code)) return toast(`Letter ${code} is already used by someone else.`);
+    if (await write([{col:'members', id:email, data:{email, name: t.name.trim(), code, role: (ex && ex.role === 'owner') || OWNERS.includes(email) ? 'owner' : 'staff', active:true, addedAt: (ex && ex.addedAt) || nowIso()}}], `${email} can now sign in`)){ UI.team = {email:'', name:'', code:''}; renderView(); }
+  },
+  cartAdd: el => {
+    const id = el.dataset.id, p = S.products[id]; if (!p) return;
+    const ex = UI.cart.items.find(i => i.productId === id);
+    if (ex) ex.qty = String(r3(num(ex.qty) + 1)); else UI.cart.items.push({productId: id, name: p.name, qty: '1', price: +p.price ? String(p.price) : ''});
+    saveDraft(); renderView();
+  },
+  cartRemove: el => { UI.cart.items.splice(+el.dataset.i, 1); saveDraft(); renderView(); },
+  cartClear: () => { UI.cart = Object.assign(freshCart(), {method: UI.cart.method}); saveDraft(); renderView(); },
+  paidFull: () => { UI.cart.paidTouched = false; UI.cart.paid = ''; saveDraft(); renderView(); },
+  paidCredit: () => { UI.cart.paidTouched = true; UI.cart.paid = '0'; saveDraft(); renderView(); },
+  newCustomerForSale: () => customerForm(null, id => { UI.cart.customerId = id; saveDraft(); renderView(); }),
+  recordSale: async () => {
+    if (UI.busy) return;
+    const c = UI.cart;
+    const items = c.items.map(it => ({productId: it.productId, name: (S.products[it.productId] || {}).name || it.name || 'Item', qty: num(it.qty), price: num(it.price), cost: Math.round(((D.prod[it.productId] || {}).avg || 0) * 100) / 100}));
+    if (!items.length) return toast('Add at least one product.');
+    if (items.some(i => !(i.qty > 0))) return toast('Each line needs a quantity above zero.');
+    if (c.items.some(it => it.price !== '' && isNaN(parseNum(it.price)))) return toast('One of the prices isn’t a number.');
+    const subtotal = sum(items, i => i.qty * i.price), discount = num(c.discount);
+    if (discount < 0 || discount > subtotal) return toast('The discount can’t be more than the subtotal.');
+    const total = subtotal - discount, paid = c.paidTouched ? num(c.paid) : total;
+    if (paid < 0 || paid > total + 0.5) return toast('Amount paid can’t be more than the total.');
+    if (paid < total - 0.5 && !c.customerId) return toast('Choose a customer for a credit sale, so the balance is tracked.');
+    const id = uid();
+    const sale = {no: nextNo(), series: mySeries(), date: c.date || todayStr(), customerId: c.customerId || null, walkin: c.customerId ? '' : c.walkin.trim(), items, discount, paid: Math.min(paid, total), method: c.method, note: c.note.trim(), by: S.email, at: nowIso()};
+    UI.busy = true;
+    const ok = await write([{col:'sales', id, data: sale, merge:false}], 'Sale recorded');
+    UI.busy = false;
+    if (ok){ UI.cart = Object.assign(freshCart(), {method: c.method}); saveDraft(); renderView(); invoiceModal(id); }
+    else renderView();
+  },
+  addExpense: async () => {
+    const e = UI.exp, a = num(e.amount);
+    if (!(a > 0)) return toast('Enter the amount spent.');
+    if (await write([{col:'expenses', id:uid(), merge:false, data:{date: e.date || todayStr(), category: e.category, amount: a, method: e.method, note: e.note.trim(), by: S.email, at: nowIso()}}], 'Expense added')){ UI.exp = {date: e.date, category: e.category, amount:'', method: e.method, note:''}; renderView(); }
+  },
+  askExp: el => { UI.confirmExp = el.dataset.id; renderView(); },
+  cancelExp: () => { UI.confirmExp = ''; renderView(); },
+  voidExpense: async el => { if (await write([{col:'expenses', id:el.dataset.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Expense removed')){ UI.confirmExp = ''; renderView(); } },
+  saveShop: async () => {
+    const f = UI.shop; const doc = {shopName: (f.shopName || '').trim(), address: (f.address || '').trim(), phone: (f.phone || '').trim(), prefix: (f.prefix || '').trim() || 'F', footer: (f.footer || '').trim()};
+    if (await write([{col:'config', id:'settings', data:doc}], 'Shop details saved')) UI.shop = null;
+  },
+  backupJson: () => {
+    const dump = {format: 'shop-erp-v1', exportedAt: nowIso(), settings: S.settings};
+    for (const c of COLS) if (c !== 'config') dump[c] = S[c];
+    saveFile(`shop-erp-backup-${todayStr()}.json`, JSON.stringify(dump, jsonReplacer, 1), 'application/json');
+  },
+  exportSales: () => {
+    const rows = [['Date', 'Invoice', 'Customer', 'Product', 'Category', 'Qty', 'Unit price GNF', 'Line total GNF', 'Unit cost GNF', 'Line profit GNF', 'Invoice discount GNF', 'Invoice paid GNF', 'Method', 'Sold by', 'Status']];
+    for (const s of D.sales.slice().reverse()) for (const i of s.items) rows.push([s.date, invNoS(s), custName(s), i.name, (S.products[i.productId] || {}).category || '', i.qty, i.price, i.qty * i.price, i.cost, Math.round(i.qty * (i.price - i.cost)), s.discount, s.paid, s.method || '', staffName(s.by), s.void ? 'Void' : 'OK']);
+    saveFile(`sales-lines-${todayStr()}.csv`, toCsv(rows), 'text/csv');
+  },
+  exportStock: () => {
+    const rows = [['Product', 'Code', 'Brand', 'Category', 'Unit', 'In stock', 'On the way', 'Avg cost GNF', 'Sale price GNF', 'Value at cost GNF', 'Reorder at']];
+    for (const [id, p] of sortedBy(S.products)){ const x = D.prod[id] || {}; rows.push([p.name, p.sku || '', p.brand || '', p.category || '', p.unit || 'piece', x.stock || 0, x.transit || 0, Math.round(x.avg || 0), p.price || 0, Math.round(Math.max(0, x.stock || 0) * (x.avg || 0)), p.min || 0]); }
+    saveFile(`stock-${todayStr()}.csv`, toCsv(rows), 'text/csv');
+  }
+};
+const IN = {
+  paid: el => { UI.cart.paid = el.value; UI.cart.paidTouched = true; saveDraft(); renderView(); }
+};
+
+/* ================= events ================= */
+function onInput(ev){
+  const el = ev.target; if (!(el instanceof HTMLElement)) return;
+  if (el.id === 'imp-file'){ if (ev.type === 'change') handleImport(el); return; }
+  if (ev.type === 'change' && !(el.tagName === 'SELECT' || el.type === 'date' || el.type === 'checkbox')) return;
+  const scrim = el.closest('.scrim'); const m = scrim ? MODAL_BY_EL.get(scrim) : null;
+  const root = m ? m.state : UI;
+  if (el.dataset.bind){
+    if (!m && el.dataset.bind.startsWith('shop.') && !UI.shop) UI.shop = {...S.settings};
+    setPath(root, el.dataset.bind, el.type === 'checkbox' ? el.checked : el.value);
+    if (!m && el.dataset.bind.startsWith('cart.')) saveDraft();
+  }
+  if (el.dataset.in){ const h = (m && m.ins[el.dataset.in]) || IN[el.dataset.in]; if (h){ h(el, m); return; } }
+  if ('rr' in el.dataset){ if (m) m.render(); else renderView(); }
+}
+async function handleImport(el){
+  const file = el.files && el.files[0]; if (!file) return;
+  try {
+    const json = JSON.parse(await file.text());
+    const {ops, summary} = importClaude(json);
+    if (!ops.length){ UI.importInfo = 'That file has no records in it.'; renderView(); return; }
+    if (await write(ops)){ UI.importInfo = `Imported ${summary}.`; toast('Import finished'); }
+  } catch (e){ UI.importInfo = 'That file isn’t a backup from the Claude version of this app.'; }
+  el.value = ''; renderView();
+}
+document.addEventListener('input', onInput);
+document.addEventListener('change', onInput);
+document.addEventListener('submit', ev => { if (ev.target && ev.target.id === 'gate-form'){ ev.preventDefault(); emailSubmit(); } });
+document.addEventListener('click', ev => {
+  const t = ev.target; if (!(t instanceof Element)) return;
+  const scrim = t.closest('.scrim'); const m = scrim ? MODAL_BY_EL.get(scrim) : null;
+  if (scrim && t === scrim){ closeModal(m); return; }
+  if (t.closest('[data-close]')){ closeModal(m); return; }
+  const a = t.closest('[data-act]'); if (!a || a.disabled) return;
+  const h = (m && m.acts[a.dataset.act]) || ACT[a.dataset.act];
+  if (h){ ev.preventDefault(); h(a, m, ev); }
+});
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'Escape' && MODALS.length){ closeModal(MODALS[MODALS.length - 1]); return; }
+  if ((ev.key === 'Enter' || ev.key === ' ') && ev.target instanceof Element && ev.target.matches('tr[data-act]')){ ev.preventDefault(); ev.target.click(); return; }
+  if (ev.key === 'Enter' && ev.target && ev.target.id === 'sell-q'){ const b = document.querySelector('#view .pitem'); if (b){ ev.preventDefault(); ACT.cartAdd(b); UI.cart.q = ''; saveDraft(); renderView(); } }
+});
+document.addEventListener('focusin', ev => { const t = ev.target; if (!RESTORING && t && t.dataset && 'sa' in t.dataset && t.select){ setTimeout(() => { try { if (document.activeElement === t) t.select(); } catch {} }, 0); } });
+function route(){ const h = location.hash.replace('#', ''); UI.view = ROUTES.includes(h) ? h : 'home'; if (UI.view !== 'shop') UI.shop = null; if (S.auth === 'ready'){ closeAll(); renderAll(); window.scrollTo(0, 0); } }
+window.addEventListener('hashchange', route);
+window.addEventListener('online', () => { S.online = true; schedule(); });
+window.addEventListener('offline', () => { S.online = false; schedule(); });
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEvt = e; schedule(); });
+
+/* ================= boot ================= */
+function boot(){
+  const h = location.hash.replace('#', ''); UI.view = ROUTES.includes(h) ? h : 'home';
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  if (!firebaseConfig || !firebaseConfig.apiKey || String(firebaseConfig.apiKey).startsWith('PASTE')){ S.auth = 'setup'; renderAll(); return; }
+  const app = F.initializeApp(firebaseConfig);
+  S.fs = F.initializeFirestore(app, {ignoreUndefinedProperties: true, localCache: F.persistentLocalCache({tabManager: F.persistentMultipleTabManager(), cacheSizeBytes: F.CACHE_SIZE_UNLIMITED})});
+  S.authObj = F.getAuth(app);
+  renderAll();
+  F.onAuthStateChanged(S.authObj, user => {
+    if (!user){ S.auth = 'signedOut'; S.user = null; renderAll(); return; }
+    S.user = user; S.email = (user.email || '').toLowerCase(); S.isOwner = !!S.email && OWNERS.includes(S.email);
+    UI.gate.email = UI.gate.email || S.email;
+    if (!user.emailVerified){ S.auth = 'unverified'; renderAll(); return; }
+    if (S.auth !== 'denied' && S.auth !== 'rules') S.auth = 'ready';
+    renderAll(); startSync();
+  });
+}
+boot();
+
+// Exposed for automated checks only; nothing in the app depends on it.
+window.__erp = { S, D: () => D, RAW, LIVE, purchaseCalc, parseNum, importClaude };

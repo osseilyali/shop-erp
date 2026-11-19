@@ -1,0 +1,73 @@
+# Shop ERP
+
+Stock, market purchases and imports (with landed cost), sales and invoices, customer credit, supplier balances, expenses and profit reports for an appliance and plumbing shop.
+
+- Runs in any browser, on phone or computer. Can be added to the home screen like an app.
+- Keeps working without internet. Sales, payments and expenses are saved on the device and upload on their own when the connection returns.
+- Data lives in the shop's own Firebase project (Google). Free at this shop's size.
+- Hosted free on GitHub Pages.
+
+## Files
+
+| File | What it is |
+|---|---|
+| `index.html` | Page layout and styles |
+| `app.js` | All screens and business logic |
+| `config.js` | The shop's Firebase settings and the owner's email |
+| `firestore.rules` | Who may read and write the data (paste into Firebase) |
+| `sw.js` | Keeps the app's files on the device so it opens offline |
+| `vendor/firebase.js` | Firebase library, bundled (version 12.19.0) |
+| `manifest.webmanifest`, `icons/` | Home-screen app name and icon |
+
+## One-time setup
+
+1. **Firebase project** (on the owner's Google account): create a project at console.firebase.google.com.
+2. **Database**: Firestore → Create database → Standard edition → `europe-west1` → production mode.
+3. **Sign-in**: Authentication → Sign-in method → enable **Google** and **Email/Password**.
+4. **Web app**: Project settings → Your apps → `</>` → register. Copy `firebaseConfig` into `config.js`, and set `ownerEmail`.
+5. **Rules**: Firestore → Rules → paste `firestore.rules`, replace `OWNER_EMAIL` with the owner's email in lowercase → Publish.
+6. **Hosting**: push this folder to a GitHub repository → Settings → Pages → deploy from the `main` branch, root folder. The app's address will be `https://<user>.github.io/<repo>/`.
+7. **Allow the address for Google sign-in**: Firebase → Authentication → Settings → Authorized domains → add `<user>.github.io`.
+
+## Adding staff
+
+The owner opens **Team**, adds the person's email and an invoice letter (B, C, …), and sends them the app link. They sign in with Google, or create an account with that email and confirm the link that is emailed to them. Removing someone in Team cuts their access immediately; their past sales stay.
+
+Each person's invoices carry their own letter (F-A-00012, F-B-00003), so two phones selling offline at the same time never produce the same number.
+
+## How offline works
+
+- The app's files are kept on the device by `sw.js`. After the first visit it opens without internet.
+- Firestore keeps a copy of all records on the device. Changes made offline are queued and uploaded when the connection returns, even if the app was closed in between.
+- The status line at the bottom of the menu says **Online · all changes saved**, **Uploading changes…** or **Offline**.
+- Signing in needs internet the first time on each device.
+
+## Free limits
+
+Firebase's free plan allows 50,000 reads and 20,000 writes per day. The app loads records from the device first and asks the server only for what changed since the last visit, so normal use stays far below the limit. A brand-new device downloads everything once.
+
+## Backups
+
+Shop settings → **Full backup (.json)**, **Sales lines (.csv)**, **Stock list (.csv)**. Firebase keeps the data safe online; a monthly backup on a computer is a good extra copy.
+
+## Updating the app
+
+Change the files, push to GitHub, and Pages publishes the new version in a minute or two. Phones pick it up the next time the app opens with internet. If you change `sw.js`, bump `CACHE` (for example `shop-erp-v2`).
+
+## Data model (for future work)
+
+Every record is one Firestore document with `updatedAt` set by the server; deletes are soft (`deleted: true`), so devices can fetch only changes.
+
+| Collection | One document per | Key fields |
+|---|---|---|
+| `config/settings` | — | shopName, address, phone, prefix, footer |
+| `members/{email}` | team member | name, code (invoice letter), role, active |
+| `products` | product | name, sku, category, brand, unit, price, cost, min, active |
+| `customers`, `suppliers` | person or company | name, phone, … |
+| `purchases` | purchase or import | date, supplierId, kind, currency, rate, status, lines[], extras[], payments{} |
+| `adjustments` | stock correction | date, productId, qty (+/−), unitCost, reason |
+| `sales` | invoice | no, series, date, customerId, items[{productId, qty, price, cost}], discount, paid, method, void |
+| `payments` | customer payment | date, customerId, amount, method, void |
+| `expenses` | expense | date, category, amount, method, void |
+
+Stock, average landed cost, customer and supplier balances and profit are calculated in the app from these records. Double-entry accounting can later be generated from the same records (each sale, purchase, payment and expense becomes a journal entry).
