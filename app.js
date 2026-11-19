@@ -143,7 +143,7 @@ function derive(){
   const sales = [], expenses = [], payments = [];
   for (const [id, s] of Object.entries(S.sales)){
     if (!s || !Array.isArray(s.items) || !s.date) continue;
-    const items = s.items.map(i => ({productId:i.productId, name:i.name, qty:+i.qty || 0, price:+i.price || 0, cost:+i.cost || 0}));
+    const items = s.items.map(i => ({productId:i.productId, name:i.name, brand:i.brand, sku:i.sku, qty:+i.qty || 0, price:+i.price || 0, cost:+i.cost || 0}));
     const subtotal = sum(items, i => i.qty * i.price), discount = +s.discount || 0, total = subtotal - discount;
     const paid = +s.paid || 0;
     sales.push({...s, id, series: (s.series || 'A'), items, subtotal, discount, total, cogs: sum(items, i => i.qty * i.cost), paid, balance: total - paid, void: !!s.void});
@@ -238,6 +238,7 @@ function findProdByLabel(label){
   const byName = Object.entries(S.products).filter(([, p]) => (p.name || '').toLowerCase() === t);
   return byName.length === 1 ? byName[0][0] : '';
 }
+function itemDetail(i){ const p = S.products[i.productId] || {}; return [i.brand != null ? i.brand : p.brand, i.sku != null ? i.sku : p.sku].filter(Boolean).join(' · '); }
 const qtyU = (q, unit) => `${qtyFmt(q)} ${esc(unit && unit !== 'piece' ? unit : 'pcs')}`;
 function allCats(){ const s = new Set(DEFAULT_CATS); Object.values(S.products).forEach(p => { if (p.category) s.add(p.category); }); return [...s]; }
 function isLow(id){ const p = S.products[id], x = D.prod[id]; if (!p || !x || p.active === false) return false; const min = +p.min || 0; return min > 0 ? x.stock <= min : (x.moves > 0 && x.stock <= 0); }
@@ -562,7 +563,7 @@ VIEWS.sell = function(){
     const qn = num(it.qty), pn = num(it.price);
     const short1 = qn > x.stock, below = pn > 0 && x.avg > 0 && pn < x.avg;
     return `<div class="cline">
-      <div class="cl-top"><div class="nm"><b>${esc(p.name)}</b><span class="sub">${qtyU(x.stock, p.unit)} in stock${x.avg ? ` · cost ${money(x.avg)}` : ''}</span></div><button type="button" class="btn ghost sm iconbtn" data-act="cartRemove" data-i="${i}" aria-label="Remove ${esc(p.name)}">${ic('x')}</button></div>
+      <div class="cl-top"><div class="nm"><b>${esc(p.name)}</b><span class="sub">${itemDetail(it) ? esc(itemDetail(it)) + ' · ' : ''}${qtyU(x.stock, p.unit)} in stock${x.avg ? ` · cost ${money(x.avg)}` : ''}</span></div><button type="button" class="btn ghost sm iconbtn" data-act="cartRemove" data-i="${i}" aria-label="Remove ${esc(p.name)}">${ic('x')}</button></div>
       <div class="cl-bot"><input id="cq-${i}" class="inp n qty" inputmode="decimal" value="${esc(it.qty)}" data-bind="cart.items.${i}.qty" data-rr data-sa aria-label="Quantity"><span class="x">×</span><input id="cp-${i}" class="inp n pr" inputmode="decimal" value="${esc(it.price)}" data-bind="cart.items.${i}.price" data-rr data-sa aria-label="Unit price in GNF" placeholder="Price"><span class="cl-total">${money(qn * pn)}</span></div>
       ${short1 ? `<p class="warnline">Only ${qtyU(x.stock, p.unit)} recorded in stock.</p>` : ''}${below ? `<p class="warnline">Below average cost of ${money(x.avg)} GNF.</p>` : ''}
     </div>`;
@@ -1239,7 +1240,7 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
 /* ----- invoice ----- */
 function invoiceText(s){
   const L = [shopName(), [S.settings.address, S.settings.phone].filter(Boolean).join(' · '), '', `Invoice ${invNoS(s)} · ${fdate(s.date)}`, `Customer: ${custName(s)}`, ''];
-  s.items.forEach(i => L.push(`${qtyFmt(i.qty)} × ${i.name} @ ${money(i.price)} = ${money(i.qty * i.price)}`));
+  s.items.forEach(i => { const d = itemDetail(i); L.push(`${qtyFmt(i.qty)} × ${i.name}${d ? ` (${d})` : ''} @ ${money(i.price)} = ${money(i.qty * i.price)}`); });
   L.push('');
   if (s.discount) L.push(`Discount: −${money(s.discount)}`);
   L.push(`TOTAL: ${money(s.total)} GNF`, `Paid: ${money(s.paid)} GNF (${s.method || 'Cash'})`);
@@ -1261,7 +1262,7 @@ function invoiceModal(saleId){
         <div class="inv-head"><div><div class="inv-shop">${esc(shopName())}</div><div class="sub">${esc([S.settings.address, S.settings.phone].filter(Boolean).join(' · ') || 'Add your address and phone in Shop settings')}</div></div>
           <div class="inv-meta"><div class="mono">${invNoS(s)}</div><div class="sub">${fdate(s.date)}${s.at ? ' · ' + timeOf(s.at) : ''}</div></div></div>
         <div><span class="lbl">Billed to</span><div><b>${esc(custName(s))}</b>${k && k.phone ? ` <span class="sub">· ${esc(k.phone)}</span>` : ''}</div></div>
-        <div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${s.items.map(i => `<tr><td>${esc(i.name)}</td><td class="n">${qtyFmt(i.qty)}</td><td class="n">${money(i.price)}</td><td class="n">${money(i.qty * i.price)}</td></tr>`).join('')}</tbody></table></div>
+        <div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${s.items.map(i => `<tr><td>${esc(i.name)}${itemDetail(i) ? `<span class="sub">${esc(itemDetail(i))}</span>` : ''}</td><td class="n">${qtyFmt(i.qty)}</td><td class="n">${money(i.price)}</td><td class="n">${money(i.qty * i.price)}</td></tr>`).join('')}</tbody></table></div>
         <div class="totals">
           ${s.discount ? `<div class="row"><span class="muted">Subtotal</span><span>${money(s.subtotal)}</span></div><div class="row"><span class="muted">Discount</span><span>−${money(s.discount)}</span></div>` : ''}
           <div class="row grand"><span>Total</span><span>${money(s.total)} <small class="sub">GNF</small></span></div>
@@ -1428,7 +1429,7 @@ const ACT = {
   recordSale: async () => {
     if (UI.busy) return;
     const c = UI.cart;
-    const items = c.items.map(it => ({productId: it.productId, name: (S.products[it.productId] || {}).name || it.name || 'Item', qty: num(it.qty), price: num(it.price), cost: Math.round(((D.prod[it.productId] || {}).avg || 0) * 100) / 100}));
+    const items = c.items.map(it => ({productId: it.productId, name: (S.products[it.productId] || {}).name || it.name || 'Item', brand: (S.products[it.productId] || {}).brand || '', sku: (S.products[it.productId] || {}).sku || '', qty: num(it.qty), price: num(it.price), cost: Math.round(((D.prod[it.productId] || {}).avg || 0) * 100) / 100}));
     if (!items.length) return toast('Add at least one product.');
     if (items.some(i => !(i.qty > 0))) return toast('Each line needs a quantity above zero.');
     if (c.items.some(it => it.price !== '' && isNaN(parseNum(it.price)))) return toast('One of the prices isn’t a number.');
@@ -1463,8 +1464,8 @@ const ACT = {
     saveFile(`shop-erp-backup-${todayStr()}.json`, JSON.stringify(dump, jsonReplacer, 1), 'application/json');
   },
   exportSales: () => {
-    const rows = [['Date', 'Invoice', 'Customer', 'Product', 'Category', 'Qty', 'Unit price GNF', 'Line total GNF', 'Unit cost GNF', 'Line profit GNF', 'Invoice discount GNF', 'Invoice paid GNF', 'Method', 'Sold by', 'Status']];
-    for (const s of D.sales.slice().reverse()) for (const i of s.items) rows.push([s.date, invNoS(s), custName(s), i.name, (S.products[i.productId] || {}).category || '', i.qty, i.price, i.qty * i.price, i.cost, Math.round(i.qty * (i.price - i.cost)), s.discount, s.paid, s.method || '', staffName(s.by), s.void ? 'Void' : 'OK']);
+    const rows = [['Date', 'Invoice', 'Customer', 'Product', 'Brand · model', 'Category', 'Qty', 'Unit price GNF', 'Line total GNF', 'Unit cost GNF', 'Line profit GNF', 'Invoice discount GNF', 'Invoice paid GNF', 'Method', 'Sold by', 'Status']];
+    for (const s of D.sales.slice().reverse()) for (const i of s.items) rows.push([s.date, invNoS(s), custName(s), i.name, itemDetail(i), (S.products[i.productId] || {}).category || '', i.qty, i.price, i.qty * i.price, i.cost, Math.round(i.qty * (i.price - i.cost)), s.discount, s.paid, s.method || '', staffName(s.by), s.void ? 'Void' : 'OK']);
     saveFile(`sales-lines-${todayStr()}.csv`, toCsv(rows), 'text/csv');
   },
   exportStock: () => {
