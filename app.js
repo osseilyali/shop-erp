@@ -17,6 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const APP_VERSION = '2026-11-19 · 4';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -109,7 +110,7 @@ const RAW = Object.fromEntries(COLS.map(c => [c, new Map()]));
 const LIVE = {};
 const S = {
   auth:'loading', user:null, email:'', isOwner:false, fs:null, authObj:null,
-  cacheLoaded:false, slow:false, online:navigator.onLine, unsynced:false, listenErr:'', installEvt:null,
+  cacheLoaded:false, slow:false, online:navigator.onLine, unsynced:false, listenErr:'', installEvt:null, updateReady:false,
   settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}, accounts:{}, transfers:{}, equity:{}, cashcounts:{}
 };
 const freshCart = () => ({items:[], customerId:'', walkin:'', discount:'', paid:'', paidTouched:false, method:'Cash', accountId:'', date:todayStr(), note:'', q:''});
@@ -536,6 +537,7 @@ function withFocus(container, fn){
 }
 function banners(){
   let h = '';
+  if (S.updateReady) h += `<div class="banner info"><div style="flex:1"><b>A new version of the app is ready.</b><span class="sub">Reload to start using it. Nothing you entered is lost.</span></div><button type="button" class="btn primary sm" data-act="reload">Reload</button></div>`;
   if (!S.online) h += `<div class="banner info"><div><b>You’re offline.</b><span class="sub">Keep working. Sales, payments and expenses are saved on this device and upload on their own when the internet is back.</span></div></div>`;
   else if (S.listenErr) h += `<div class="banner"><div><b>The connection to the database stopped.</b><span class="sub">Reload the page to reconnect. Nothing saved on this device is lost.</span></div></div>`;
   return h;
@@ -1112,6 +1114,7 @@ VIEWS.shop = function(){
   <div class="grid2">
     <section class="panel"><div class="panel-h"><h2>Your account</h2></div><div class="panel-b stack">
       <p>Signed in as <b>${esc(S.email)}</b>${S.isOwner ? ' (owner)' : ''}. Your invoices use the letter <b>${esc(mySeries())}</b>.</p>
+      <p class="hint">App version ${esc(APP_VERSION)}</p>
       ${S.installEvt ? `<div><button type="button" class="btn" data-act="install">${ic('download')}Install as an app</button></div>` : `<p class="sub">To open it like an app: on Android, Chrome menu → <b>Add to Home screen</b>. On iPhone, Safari → Share → <b>Add to Home Screen</b>.</p>`}
       <div><button type="button" class="btn" data-act="signOut">${ic('logout')}Sign out</button></div>
     </div></section>
@@ -1153,7 +1156,7 @@ const closeAll = () => { while (MODALS.length) closeModal(MODALS[MODALS.length -
 
 function moreSheet(){
   const items = [['sales','Sales & invoices','receipt'], ['customers','Customers & credit','users'], ['suppliers','Suppliers','store'], ['expenses','Expenses','wallet'], ...(S.isOwner ? [['money','Money accounts','bank']] : []), ['reports','Reports','chart'], ...(S.isOwner ? [['team','Team','team']] : []), ['shop','Shop settings','sliders']];
-  openModal({title: () => 'More', live: true, body: () => `<div class="navgroup">${items.map(([r, l, i]) => `<button type="button" class="navlink" data-act="go" data-to="${r}"${UI.view === r ? ' aria-current="page"' : ''}>${ic(i)}<span>${l}</span></button>`).join('')}</div><div class="sync"><span class="dot ${syncInfo()[0]}"></span>${syncInfo()[1]}</div><div class="sync"><span>${esc(S.email)}</span></div>`});
+  openModal({title: () => 'More', live: true, body: () => `<div class="navgroup">${items.map(([r, l, i]) => `<button type="button" class="navlink" data-act="go" data-to="${r}"${UI.view === r ? ' aria-current="page"' : ''}>${ic(i)}<span>${l}</span></button>`).join('')}</div><div class="sync"><span class="dot ${syncInfo()[0]}"></span>${syncInfo()[1]}</div><div class="sync"><span>${esc(S.email)}${S.isOwner ? ' · owner' : ''} · version ${esc(APP_VERSION)}</span></div>`});
 }
 
 function confirmBar(text, yesAct, yesLabel){ return `<div class="confirmbar"><p>${text}</p><button type="button" class="btn ghost" data-act="confirmNo">Keep it</button><button type="button" class="btn danger solid" data-act="${yesAct}">${yesLabel}</button></div>`; }
@@ -1839,7 +1842,13 @@ window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.inst
 /* ================= boot ================= */
 function boot(){
   const h = location.hash.replace('#', ''); UI.view = ROUTES.includes(h) ? h : 'home';
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')){
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController){ S.updateReady = true; schedule(); } });
+    navigator.serviceWorker.register('./sw.js').then(reg => {
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(() => {});
+  }
   if (!firebaseConfig || !firebaseConfig.apiKey || String(firebaseConfig.apiKey).startsWith('PASTE')){ S.auth = 'setup'; renderAll(); return; }
   const app = F.initializeApp(firebaseConfig);
   S.fs = F.initializeFirestore(app, {ignoreUndefinedProperties: true, localCache: F.persistentLocalCache({tabManager: F.persistentMultipleTabManager(), cacheSizeBytes: F.CACHE_SIZE_UNLIMITED})});

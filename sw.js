@@ -1,6 +1,6 @@
 // Keeps the app's own files on the device so it opens with no internet.
 // Firebase traffic is never touched here; Firestore keeps its own offline copy of the data.
-const CACHE = 'shop-erp-v3';
+const CACHE = 'shop-erp-v4';
 const SHELL = ['./', './index.html', './app.js', './config.js', './vendor/firebase.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -31,7 +31,8 @@ self.addEventListener('fetch', e => {
   e.respondWith((async () => {
     const c = await caches.open(CACHE);
     const cached = (await c.match(req, {ignoreSearch: true})) || (req.mode === 'navigate' ? await c.match('./index.html') : undefined);
-    const net = fetch(req).then(res => { if (res.ok) c.put(req, res.clone()); return res; });
+    // no-cache: always ask GitHub whether the file changed, so a new version arrives on the next open.
+    const net = fetch(req.url, {cache: 'no-cache', credentials: 'same-origin'}).then(res => { if (res.ok) c.put(req, res.clone()); return res; });
     if (!cached) return net.catch(() => Response.error());
     const slow = new Promise(r => setTimeout(() => r(cached), 2500));
     return Promise.race([net.catch(() => cached), slow]);
