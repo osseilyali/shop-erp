@@ -17,8 +17,8 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-19 · 4';
-const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts'];
+const APP_VERSION = '2026-11-19 · 5';
+const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
 const METHOD_ACC = {'Cash':'cash', 'Orange Money':'orange', 'MTN MoMo':'mtn', 'Bank transfer':'bank', 'Cheque':'bank'};
@@ -44,6 +44,7 @@ const ICONS = {
   chart:'<path d="M3 3v18h18"/><path d="M7 15v3M11 10v8M15 12v6M19 6v12"/>',
   sliders:'<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   bank:'<path d="M3 10l9-6 9 6"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 20h18"/>',
+  dollar:'<path d="M12 2v20"/><path d="M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   team:'<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="M19 8h3M20.5 6.5v3"/>',
   dots:'<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>',
   plus:'<path d="M12 5v14M5 12h14"/>',
@@ -111,7 +112,7 @@ const LIVE = {};
 const S = {
   auth:'loading', user:null, email:'', isOwner:false, fs:null, authObj:null,
   cacheLoaded:false, slow:false, online:navigator.onLine, unsynced:false, listenErr:'', installEvt:null, updateReady:false,
-  settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}, accounts:{}, transfers:{}, equity:{}, cashcounts:{}
+  settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}, accounts:{}, transfers:{}, equity:{}, cashcounts:{}, rates:{}
 };
 const freshCart = () => ({items:[], customerId:'', walkin:'', discount:'', paid:'', paidTouched:false, method:'Cash', accountId:'', date:todayStr(), note:'', q:''});
 const UI = {
@@ -121,7 +122,7 @@ const UI = {
   salesQ:'', salesMonth: todayStr().slice(0,7),
   purchQ:'', purchStatus:'',
   custQ:'', supQ:'',
-  expMonth: todayStr().slice(0,7), exp:{date:todayStr(), category:'Rent', amount:'', method:'Cash', accountId:'', note:''}, accSetup:null, confirmExp:'',
+  expMonth: todayStr().slice(0,7), exp:{date:todayStr(), category:'Rent', amount:'', method:'Cash', accountId:'', note:''}, accSetup:null, rateQuick:'', rateCheck:null, confirmExp:'',
   repPeriod:'m:' + todayStr().slice(0,7),
   shop:null,
   team:{email:'', name:'', code:''},
@@ -244,7 +245,9 @@ function derive(){
     mv(k.accountId, k.date, diff, 'count', 'Cash count difference', `counted ${fmtAcc(+k.counted || 0, x.cur)}`, '', k.at);
     if (diff && x.cur !== 'USD' && !(x.from && k.date < x.from)) extraCosts.push({id: 'cc-' + id, date: k.date, category: 'Cash count difference', amount: -diff, method: nm(k.accountId), note: diff < 0 ? 'Cash short at the count' : 'Cash over at the count', auto: true});
   }
-  D = {sales, expenses, payments, prod, pc, maxNoBy, stockValue, transitValue, transitCount, custBal, supBal, invRemain, acc, extraCosts};
+  // dollar rate: set by hand, one entry per day; the newest day wins
+  const rateHist = Object.entries(S.rates).map(([id, r]) => ({id, date: r.date || id, rate: +r.rate || 0, by: r.by, at: r.at})).filter(r => r.rate > 0).sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : String(b.at || '').localeCompare(String(a.at || '')));
+  D = {sales, expenses, payments, prod, pc, maxNoBy, stockValue, transitValue, transitCount, custBal, supBal, invRemain, acc, extraCosts, rateHist, rate: rateHist[0] || null};
 }
 derive();
 
@@ -282,6 +285,10 @@ function findProdByLabel(label){
   return byName.length === 1 ? byName[0][0] : '';
 }
 function itemDetail(i){ const p = S.products[i.productId] || {}; return [i.brand != null ? i.brand : p.brand, i.sku != null ? i.sku : p.sku].filter(Boolean).join(' · '); }
+/* ----- dollar rate ----- */
+const curRate = () => (D.rate ? D.rate.rate : 0);
+const rateIsToday = () => !!D.rate && D.rate.date === todayStr();
+const rateNote = () => !D.rate ? 'No dollar rate entered yet' : rateIsToday() ? `Today’s rate: ${money(D.rate.rate)} GNF` : `Last rate ${money(D.rate.rate)} GNF is from ${fdate(D.rate.date)}. Update it if it changed`;
 /* ----- money accounts ----- */
 const accList = filter => Object.entries(S.accounts).filter(([, a]) => a.active !== false && (!filter || filter(a))).sort((a, b) => ((a[1].order ?? 99) - (b[1].order ?? 99)) || String(a[1].name).localeCompare(String(b[1].name)));
 const hasAccounts = () => accList().length > 0;
@@ -312,7 +319,7 @@ function payData(st){
 function supplierPayFields(px, pay, p){
   if (hasAccounts() && (!pay.accountId || !S.accounts[pay.accountId])) pay.accountId = defaultAcc();
   const usd = hasAccounts() && isUSD(pay.accountId);
-  if (usd && !pay.rate && p && p.currency === 'USD' && num(p.rate)) pay.rate = String(p.rate);
+  if (usd && !pay.rate && !pay.ratePrefilled){ pay.rate = p && p.currency === 'USD' && num(p.rate) ? String(p.rate) : (curRate() ? String(curRate()) : ''); pay.ratePrefilled = true; }
   return `${hasAccounts() ? `<div class="field"><label for="${px}-acc">Paid from</label>${accSelect(px + '-acc', 'pay.accountId', pay.accountId, {usd: true, rr: true})}</div>` : `<div class="field"><label for="${px}-m">Paid by</label><select id="${px}-m" class="inp" data-bind="pay.method">${opts(METHODS, pay.method)}</select></div>`}
     <div class="field"><label for="${px}-a">Amount (${usd ? 'USD' : 'GNF'})</label><input id="${px}-a" class="inp n" inputmode="decimal" value="${esc(pay.amount)}" data-bind="pay.amount"${usd ? ' data-rr' : ''} placeholder="0"></div>
     ${usd ? `<div class="field"><label for="${px}-r">Rate: GNF for 1 USD</label><input id="${px}-r" class="inp n" inputmode="decimal" value="${esc(pay.rate || '')}" data-bind="pay.rate" data-rr placeholder="e.g. 8650"><span class="hint">${num(pay.amount) && num(pay.rate) ? `Takes ${money(num(pay.amount) * num(pay.rate))} GNF off what you owe` : 'Used to take the payment off what you owe in GNF'}</span></div>` : ''}`;
@@ -518,6 +525,7 @@ function renderRail(){
     <div class="rail-foot">
       ${S.isOwner ? `<a class="navlink" href="#team"${UI.view === 'team' ? ' aria-current="page"' : ''}>${ic('team')}<span>Team</span></a>` : ''}
       <a class="navlink" href="#shop"${UI.view === 'shop' ? ' aria-current="page"' : ''}>${ic('sliders')}<span>Shop settings</span></a>
+      <button type="button" class="navlink" data-act="openRates">${ic('dollar')}<span>${D.rate ? `1 USD = ${money(D.rate.rate)} GNF` : 'Dollar rate not set'}</span>${D.rate && !rateIsToday() ? '<span class="badge">old</span>' : ''}</button>
       <div class="sync"><span class="dot ${cls}"></span><span>${txt}</span></div>
       <div class="who">${esc(S.email)} · invoices ${esc(mySeries())}</div>
     </div>`;
@@ -537,6 +545,7 @@ function withFocus(container, fn){
 }
 function banners(){
   let h = '';
+  if (S.isOwner && S.cacheLoaded && LIVE.rates !== undefined && !rateIsToday()) h += `<div class="banner"><div style="flex:1;min-width:200px"><b>Enter today’s dollar rate</b><span class="sub">${D.rate ? `Last rate: ${money(D.rate.rate)} GNF for 1 USD, on ${fdate(D.rate.date)}.` : 'No rate entered yet.'} It’s used for imports, buying dollars and dollar payments.</span></div><div class="inline"><input id="rate-quick" class="inp n" style="width:130px" inputmode="decimal" placeholder="GNF for 1 USD" value="${esc(UI.rateQuick)}" data-bind="rateQuick" aria-label="Today's dollar rate"><button type="button" class="btn primary sm" data-act="saveRateQuick">Save</button></div></div>`;
   if (S.updateReady) h += `<div class="banner info"><div style="flex:1"><b>A new version of the app is ready.</b><span class="sub">Reload to start using it. Nothing you entered is lost.</span></div><button type="button" class="btn primary sm" data-act="reload">Reload</button></div>`;
   if (!S.online) h += `<div class="banner info"><div><b>You’re offline.</b><span class="sub">Keep working. Sales, payments and expenses are saved on this device and upload on their own when the internet is back.</span></div></div>`;
   else if (S.listenErr) h += `<div class="banner"><div><b>The connection to the database stopped.</b><span class="sub">Reload the page to reconnect. Nothing saved on this device is lost.</span></div></div>`;
@@ -544,7 +553,7 @@ function banners(){
 }
 function mobileTop(){
   const [cls, txt] = syncInfo();
-  return `<div class="mtop"><span class="brand-mark">${esc(initials())}</span><span class="brand-name">${esc(shopName())}</span><span class="dot ${cls}" title="${esc(txt)}"></span></div>`;
+  return `<div class="mtop"><span class="brand-mark">${esc(initials())}</span><span class="brand-name">${esc(shopName())}</span><button type="button" class="ratechip${D.rate && !rateIsToday() ? ' old' : ''}" data-act="openRates" aria-label="Dollar rate">$ ${D.rate ? money(D.rate.rate) : '—'}</button><span class="dot ${cls}" title="${esc(txt)}"></span></div>`;
 }
 const VIEWS = {};
 function renderView(){
@@ -888,7 +897,7 @@ VIEWS.money = function(){
   return head(`<button type="button" class="btn" data-act="cashCount">Count cash</button><button type="button" class="btn" data-act="ownerMoney">Owner money</button><button type="button" class="btn primary" data-act="newTransfer">Transfer</button>`) +
   `<section class="tiles">
     ${tileRaw('All GNF accounts', `${short(gnf)}<small>GNF</small>`, `${gnfAccs.length} account${gnfAccs.length === 1 ? '' : 's'}`, '', 'hl', `${money(gnf)} GNF`)}
-    ${accs.map(([id, a]) => { const x = D.acc[id], lc = x.lastCount; return `<button type="button" class="tile" data-act="openAccount" data-id="${id}"><span class="k">${esc(a.name)}</span><span class="v${x.bal < 0 ? ' negv' : ''}" title="${esc(fmtAcc(x.bal, a.currency))}">${a.currency === 'USD' ? esc(fmtAcc(x.bal, 'USD')) : `${short(x.bal)}<small>GNF</small>`}</span><span class="s">${esc(ACC_TYPES[a.type] || '')}${lc ? ` · counted ${fdateShort(lc.date)}` : ''}</span></button>`; }).join('')}
+    ${accs.map(([id, a]) => { const x = D.acc[id], lc = x.lastCount; return `<button type="button" class="tile" data-act="openAccount" data-id="${id}"><span class="k">${esc(a.name)}</span><span class="v${x.bal < 0 ? ' negv' : ''}" title="${esc(fmtAcc(x.bal, a.currency))}">${a.currency === 'USD' ? esc(fmtAcc(x.bal, 'USD')) : `${short(x.bal)}<small>GNF</small>`}</span><span class="s">${a.currency === 'USD' && curRate() ? `≈ ${short(x.bal * curRate())} GNF at ${money(curRate())}` : esc(ACC_TYPES[a.type] || '')}${lc ? ` · counted ${fdateShort(lc.date)}` : ''}</span></button>`; }).join('')}
   </section>
   <div class="grid2">
     <section class="panel"><div class="panel-h"><h2>Latest movements</h2><button type="button" class="btn sm" data-act="newAccount">${ic('plus')}Add account</button></div>
@@ -905,6 +914,26 @@ VIEWS.money = function(){
     </div><p class="hint" style="margin-top:10px">Money the owner takes out isn’t an expense, so it doesn’t lower the profit in Reports.</p></div></section>
   </div>`;
 };
+function rateModal(){
+  const st = {rate: rateIsToday() ? String(D.rate.rate) : '', date: todayStr()};
+  const m = openModal({state: st, live: true, title: () => 'Dollar rate',
+    body: () => `${S.isOwner ? `<div class="form">
+        <div class="field"><label for="rt-rate">GNF for 1 USD</label><input id="rt-rate" class="inp n" inputmode="decimal" value="${esc(st.rate)}" data-bind="rate" placeholder="${D.rate ? esc(String(D.rate.rate)) : 'e.g. 8650'}"></div>
+        <div class="field"><label for="rt-date">For the day</label><input id="rt-date" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
+      </div><p class="hint">Enter it every morning. New imports, dollar purchases and dollar payments start from this rate; you can still change it on each one. Rates already used on past records don’t change.</p>`
+      : `<p>${esc(rateNote())}.</p><p class="hint">The owners update the rate.</p>`}
+      <div class="sect"><h3>History</h3>${D.rateHist.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Day</th><th class="n">GNF for 1 USD</th><th class="n">Change</th><th class="hide-sm">Entered by</th></tr></thead><tbody>${D.rateHist.slice(0, 60).map((r, i, a) => { const prev = a[i + 1]; const ch = prev ? r.rate - prev.rate : 0; return `<tr><td>${fdate(r.date)}</td><td class="n">${money(r.rate)}</td><td class="n">${prev ? (ch > 0 ? '+' : ch < 0 ? '−' : '') + money(Math.abs(ch)) : ''}</td><td class="hide-sm">${esc(staffName(r.by))}</td></tr>`; }).join('')}</tbody></table></div>` : '<p class="sub">No rates entered yet.</p>'}</div>`,
+    foot: () => S.isOwner ? '<button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Save rate</button>' : '<span class="spacer"></span><button type="button" class="btn primary" data-close>Done</button>',
+    acts: { save: async () => { if (await saveRate(st.rate, st.date)) m.close(); } }
+  });
+}
+async function saveRate(v, date){
+  const r = parseNum(v);
+  if (!(r > 0)) { toast('Enter the rate: how many GNF for 1 USD.'); return false; }
+  if (D.rate && Math.abs(r - D.rate.rate) / D.rate.rate > 0.2) { toast(`That’s far from the last rate (${money(D.rate.rate)}). Check the number and save again.`); if (UI.rateCheck !== r){ UI.rateCheck = r; return false; } }
+  UI.rateCheck = null;
+  return write([{col:'rates', id: date || todayStr(), merge:false, data:{date: date || todayStr(), rate: r, by: S.email, at: nowIso()}}], `Dollar rate saved: ${money(r)} GNF`);
+}
 function accountSetup(){
   if (!UI.accSetup) UI.accSetup = {date: todayStr(), rows: DEFAULT_ACCOUNTS.map(a => ({...a, on: true, opening: ''}))};
   const s = UI.accSetup;
@@ -992,12 +1021,14 @@ function transferModal(tid){
   const st = {from: pick('cash', 0), to: pick('bank', 1), amount:'', rate:'', fee:'', date: todayStr(), note:''};
   const m = openModal({state: st, live: true, title: () => 'Move money between accounts',
     body: () => {
-      const cf = accCur(st.from), ct = accCur(st.to), fx = cf !== ct, recv = toAmountOf(st);
+      const cf = accCur(st.from), ct = accCur(st.to), fx = cf !== ct;
+      if (fx && !st.ratePrefilled && !st.rate && curRate()){ st.rate = String(curRate()); st.ratePrefilled = true; }
+      const recv = toAmountOf(st);
       return `<div class="form">
         <div class="field"><label for="tr-from">From</label>${accSelect('tr-from', 'from', st.from, {usd: true, rr: true, only: () => true})}</div>
         <div class="field"><label for="tr-to">Into</label>${accSelect('tr-to', 'to', st.to, {usd: true, rr: true, only: () => true})}</div>
         <div class="field"><label for="tr-amt">Amount taken out (${cf})</label><input id="tr-amt" class="inp n" inputmode="decimal" value="${esc(st.amount)}" data-bind="amount" data-rr placeholder="0"></div>
-        ${fx ? `<div class="field"><label for="tr-rate">Rate: GNF for 1 USD</label><input id="tr-rate" class="inp n" inputmode="decimal" value="${esc(st.rate)}" data-bind="rate" data-rr placeholder="e.g. 8650"><span class="hint">${recv ? `${esc(accName(st.to))} receives ${esc(fmtAcc(recv, ct))}` : 'The rate you actually got'}</span></div>` : ''}
+        ${fx ? `<div class="field"><label for="tr-rate">Rate: GNF for 1 USD</label><input id="tr-rate" class="inp n" inputmode="decimal" value="${esc(st.rate)}" data-bind="rate" data-rr placeholder="e.g. 8650"><span class="hint">${recv ? `${esc(accName(st.to))} receives ${esc(fmtAcc(recv, ct))}. ` : ''}${esc(rateNote())}</span></div>` : ''}
         <div class="field"><label for="tr-fee">Fee (${cf}) <span class="hint">(optional)</span></label><input id="tr-fee" class="inp n" inputmode="decimal" value="${esc(st.fee)}" data-bind="fee" placeholder="0"><span class="hint">Withdrawal or bank charge; counted as an expense</span></div>
         <div class="field"><label for="tr-date">Date</label><input id="tr-date" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
         <div class="field full"><label for="tr-note">Note</label><input id="tr-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="e.g. Deposit at the bank, dollars for the container"></div>
@@ -1155,7 +1186,7 @@ function closeModal(m){
 const closeAll = () => { while (MODALS.length) closeModal(MODALS[MODALS.length - 1]); };
 
 function moreSheet(){
-  const items = [['sales','Sales & invoices','receipt'], ['customers','Customers & credit','users'], ['suppliers','Suppliers','store'], ['expenses','Expenses','wallet'], ...(S.isOwner ? [['money','Money accounts','bank']] : []), ['reports','Reports','chart'], ...(S.isOwner ? [['team','Team','team']] : []), ['shop','Shop settings','sliders']];
+  const items = [['rates','Dollar rate','dollar'], ['sales','Sales & invoices','receipt'], ['customers','Customers & credit','users'], ['suppliers','Suppliers','store'], ['expenses','Expenses','wallet'], ...(S.isOwner ? [['money','Money accounts','bank']] : []), ['reports','Reports','chart'], ...(S.isOwner ? [['team','Team','team']] : []), ['shop','Shop settings','sliders']];
   openModal({title: () => 'More', live: true, body: () => `<div class="navgroup">${items.map(([r, l, i]) => `<button type="button" class="navlink" data-act="go" data-to="${r}"${UI.view === r ? ' aria-current="page"' : ''}>${ic(i)}<span>${l}</span></button>`).join('')}</div><div class="sync"><span class="dot ${syncInfo()[0]}"></span>${syncInfo()[1]}</div><div class="sync"><span>${esc(S.email)}${S.isOwner ? ' · owner' : ''} · version ${esc(APP_VERSION)}</span></div>`});
 }
 
@@ -1430,6 +1461,7 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
     state: st, wide: true, live: true,
     title: () => id ? `${st.kind === 'import' ? 'Import' : 'Market purchase'}${st.ref ? ' · ' + st.ref : ''}` : (st.kind === 'import' ? 'New import' : 'New market purchase'),
     body: () => {
+      if (!id && !st.ratePrefilled && st.currency === 'USD' && !st.rate && curRate()){ st.rate = String(curRate()); st.ratePrefilled = true; }
       const c = calc(); const cur = st.currency; const fx = cur !== 'GNF';
       const sups = sortedBy(S.suppliers);
       const defaults = (st.kind === 'import' ? IMPORT_EXTRAS : MARKET_EXTRAS).filter(l => !st.extras.some(x => x.label === l));
@@ -1442,7 +1474,7 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
           <div class="field"><label for="pe-date">${st.kind === 'import' ? 'Order date' : 'Date'}</label><input id="pe-date" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
           ${st.status === 'received' && st.kind === 'import' ? `<div class="field"><label for="pe-rdate">Received on</label><input id="pe-rdate" class="inp" type="date" value="${esc(st.receivedDate)}" data-bind="receivedDate"></div>` : ''}
           <div class="field"><label for="pe-cur">Currency of supplier prices</label><select id="pe-cur" class="inp" data-bind="currency" data-rr>${opts(CURRENCIES, cur)}</select></div>
-          ${fx ? `<div class="field"><label for="pe-rate">Exchange rate: GNF for 1 ${esc(cur)}</label><input id="pe-rate" class="inp n" inputmode="decimal" value="${esc(st.rate)}" data-bind="rate" data-rr placeholder="${cur === 'USD' ? 'e.g. 8650' : cur === 'EUR' ? 'e.g. 10000' : cur === 'CNY' ? 'e.g. 1200' : 'e.g. 2350'}"><span class="hint">Use the rate you actually paid</span></div>` : ''}
+          ${fx ? `<div class="field"><label for="pe-rate">Exchange rate: GNF for 1 ${esc(cur)}</label><input id="pe-rate" class="inp n" inputmode="decimal" value="${esc(st.rate)}" data-bind="rate" data-rr placeholder="${cur === 'USD' ? 'e.g. 8650' : cur === 'EUR' ? 'e.g. 10000' : cur === 'CNY' ? 'e.g. 1200' : 'e.g. 2350'}"><span class="hint">${cur === 'USD' ? esc(rateNote()) + '. Use the rate you actually paid' : 'Use the rate you actually paid'}</span></div>` : ''}
         </div>
         ${st.status === 'ordered' ? `<p class="banner info" style="padding:9px 12px"><span class="sub">In-transit goods are not counted in stock. Switch to <b>Received</b> when they arrive at the shop.</span></p>` : ''}
 
@@ -1655,7 +1687,7 @@ const jsonReplacer = (k, v) => (v && typeof v === 'object' && typeof v.toDate ==
 /* ================= actions ================= */
 const ACT = {
   more: () => moreSheet(),
-  go: el => { closeAll(); location.hash = '#' + el.dataset.to; },
+  go: el => { closeAll(); if (el.dataset.to === 'rates') return rateModal(); location.hash = '#' + el.dataset.to; },
   reload: () => location.reload(),
   google: () => googleSignIn(),
   gateMode: el => { UI.gate.mode = el.dataset.v; UI.gate.err = ''; UI.gate.note = ''; renderGate(); },
@@ -1709,6 +1741,8 @@ const ACT = {
   ownerMoney: () => equityModal(null),
   openEquity: el => equityModal(el.dataset.id),
   cashCount: () => cashCountModal(''),
+  openRates: () => rateModal(),
+  saveRateQuick: async () => { if (await saveRate(UI.rateQuick, todayStr())){ UI.rateQuick = ''; renderView(); } },
   createAccounts: async () => {
     const s = UI.accSetup; if (!s) return;
     const rows = s.rows.filter(r => r.on && String(r.name).trim());

@@ -33,6 +33,10 @@ Stock, market purchases and imports (with landed cost), sales and invoices, cust
 
 Owners see **Money accounts**: the cash box, Orange Money, MTN MoMo, the bank, the home safe and US dollars, each with its balance and statement. Every sale, customer payment, expense and supplier payment says which account the money went into or came out of. Use **Transfer** to move money between accounts (buying dollars records the rate; fees count as expenses), **Owner money** for money the owner takes out or puts in (not an expense), and **Count cash** at closing (a difference is recorded and the balance set to the count). Staff choose the account when they sell but don't see this page or the home safe.
 
+## Dollar rate
+
+The rate is entered by hand, once a day, by an owner. Until today's rate is saved, owners see a reminder at the top of every screen. The current rate shows in the menu (and as `$ 8,700` in the phone's top bar); tapping it opens the rate history. New imports in USD, buying dollars and dollar payments to suppliers start from the current rate and can still be changed on each record. Past records keep the rate they were saved with. A rate more than 20% away from the last one asks to be confirmed.
+
 ## Adding staff
 
 The owner opens **Team**, adds the person's email and an invoice letter (B, C, …), and sends them the app link. They sign in with Google, or create an account with that email and confirm the link that is emailed to them. Removing someone in Team cuts their access immediately; their past sales stay.
@@ -77,5 +81,6 @@ Every record is one Firestore document with `updatedAt` set by the server; delet
 | `transfers` | money moved between accounts | date, from, to, amount, toAmount, rate, fee, void |
 | `equity` | owner money in or out | date, kind (in/out), accountId, amount, void |
 | `cashcounts` | end-of-day count | date, accountId, expected, counted, diff |
+| `rates/{YYYY-MM-DD}` | day's dollar rate | date, rate (GNF for 1 USD), by |
 
 Stock, average landed cost, customer and supplier balances, account balances and profit are calculated in the app from these records. An account's balance is its opening amount plus every movement dated on or after its start date; records made before accounts existed are matched to an account by their payment method. Transfer fees and cash-count differences are counted as expenses; owner money in or out is not. Double-entry accounting can later be generated from the same records (each sale, purchase, payment and expense becomes a journal entry).
