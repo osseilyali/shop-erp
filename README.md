@@ -33,6 +33,10 @@ Stock, market purchases and imports (with landed cost), sales and invoices, cust
 
 Owners see **Money accounts**: the cash box, Orange Money, MTN MoMo, the bank, the home safe and US dollars, each with its balance and statement. Every sale, customer payment, expense and supplier payment says which account the money went into or came out of. Use **Transfer** to move money between accounts (buying dollars records the rate; fees count as expenses), **Owner money** for money the owner takes out or puts in (not an expense), and **Count cash** at closing (a difference is recorded and the balance set to the count). Staff choose the account when they sell but don't see this page or the home safe.
 
+## Invoices
+
+Invoices follow the shop's paper invoice book, in French: shop name, activities line, address, phone band and email; FACTURE N° and "Conakry, le"; client name, address and phone; the N° · DÉSIGNATIONS · Qté · P. UNITAIRE · Prix Total table (brand and model under each item); TOTAL; Payé and Reste à payer; the amount in French words; Le Gérant, the NB note and Le Client. **Print** produces one A4 page (or a PDF named after the invoice). All header details and the starting invoice number are in Shop settings → Invoice details; empty fields fall back to the details from the paper book. Numbers are the seller's letter plus six digits (A-000362).
+
 ## Dollar rate
 
 The rate is entered by hand, once a day, by an owner. Until today's rate is saved, owners see a reminder at the top of every screen. The current rate shows in the menu (and as `$ 8,700` in the phone's top bar); tapping it opens the rate history. New imports in USD, buying dollars and dollar payments to suppliers start from the current rate and can still be changed on each record. Past records keep the rate they were saved with. A rate more than 20% away from the last one asks to be confirmed.

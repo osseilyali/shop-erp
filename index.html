@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=IBM+Plex+Mono:wght@500&family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,500..800;1,62..125,500..800&family=IBM+Plex+Mono:wght@500&family=Inter:wght@400;500;600&display=swap">
 <style>
 :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
 body{margin:0}
@@ -334,19 +334,62 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
 .ratechip{border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);border-radius:999px;height:28px;padding:0 10px;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer;white-space:nowrap}
 .ratechip.old{border-color:var(--warn);color:var(--warn)}
 
-/* ---------- print: only the open invoice ---------- */
+/* ---------- invoice: the shop's paper layout, on screen and printed on A4 ---------- */
+.modal.mid{max-width:760px}
+.ifr{--ib:#2763AE;--ir:#B3261E;--ii:#14202B;--im:#4C5B68;position:relative;background:#fff;color:var(--ii);font-family:Inter,system-ui,sans-serif;font-size:13px;line-height:1.35;display:flex;flex-direction:column;gap:.95em;padding:1.6em 1.4em;border:1px solid var(--line);border-radius:var(--r);font-variant-numeric:tabular-nums;overflow:hidden}
+.ifr-hd{text-align:center;color:var(--ib);display:flex;flex-direction:column;align-items:center;gap:.25em;padding-bottom:.9em;border-bottom:2px solid var(--ib)}
+.ifr-name{font-family:Archivo,"Arial Narrow",sans-serif;font-weight:800;font-stretch:72%;font-size:3.6em;line-height:.95;letter-spacing:.02em;overflow-wrap:anywhere;text-wrap:balance}
+.ifr-tag,.ifr-addr,.ifr-mail,.ifr-tel,.ifr-date,.ifr-lbl{font-family:Archivo,"Arial Narrow",sans-serif;font-style:italic;font-stretch:85%}
+.ifr-tag{font-weight:700;font-size:1.2em;text-transform:uppercase;font-stretch:80%}
+.ifr-addr{font-weight:600;font-size:1.08em}
+.ifr-tel{background:var(--ib);color:#fff;border-radius:99px;padding:.15em 1.2em;font-weight:700;font-size:1.13em;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.ifr-mail{font-weight:600;font-size:1.04em}
+.ifr-row{display:flex;justify-content:space-between;align-items:baseline;gap:.6em 1.2em;flex-wrap:wrap}
+.ifr-fact{font-family:Archivo,"Arial Narrow",sans-serif;font-weight:800;font-stretch:78%;font-size:2.05em;color:var(--ib)}
+.ifr-no{color:var(--ir);font-family:"Courier New",ui-monospace,monospace;font-weight:700;font-size:.78em;margin-left:.3em;letter-spacing:.04em}
+.ifr-date{font-weight:600;color:var(--ib);font-size:1.17em}
+.ifr-date b{color:var(--ii);font-style:normal;font-family:Inter,sans-serif;font-weight:600;font-size:.9em}
+.ifr-line{display:flex;align-items:baseline;gap:.5em;min-width:0}
+.ifr-lbl{font-weight:600;color:var(--ib);font-size:1.12em;white-space:nowrap}
+.ifr-fill{flex:1;min-width:0;border-bottom:1px dotted var(--ib);padding:0 .4em .1em;font-weight:600;min-height:1.45em;overflow-wrap:anywhere}
+.ifr-m{font-weight:400;color:var(--im)}
+.ifr-words .ifr-fill{font-weight:500;font-style:italic}
+.ifr-tw{overflow-x:auto}
+.ifr-t{width:100%;min-width:31em;border-collapse:separate;border-spacing:0;border:1.5px solid var(--ib);border-radius:.6em;overflow:hidden}
+.ifr-t th{font-family:Archivo,"Arial Narrow",sans-serif;font-weight:800;font-stretch:85%;color:var(--ib);font-size:1.12em;text-align:left;padding:.5em .6em;border-bottom:1.5px solid var(--ib);white-space:nowrap}
+.ifr-t td{padding:.45em .6em;border-bottom:.75px solid var(--ib);vertical-align:top;color:var(--ii)}
+.ifr-t th+th,.ifr-t td+td{border-left:1.5px solid var(--ib)}
+.ifr-t .c-no{width:2.6em;text-align:center;color:var(--ib);font-weight:600}
+.ifr-t .c-q{width:4em;text-align:center}
+.ifr-t .c-pu,.ifr-t .c-pt{width:8.5em;text-align:right;white-space:nowrap}
+.ifr-t th.c-q,.ifr-t th.c-pu,.ifr-t th.c-pt{text-align:center}
+.ifr-t td small{display:block;color:var(--im);font-size:.86em;margin-top:.1em}
+.ifr-t .t-lbl2{text-align:right;color:var(--im)}
+.ifr-t .t-val2{text-align:right;white-space:nowrap}
+.ifr-t tr.tot td{border-bottom:0;border-top:1.5px solid var(--ib);font-weight:700}
+.ifr-t td.t-lbl{font-family:Archivo,"Arial Narrow",sans-serif;font-weight:800;font-stretch:85%;color:var(--ib);font-size:1.4em;text-align:center;letter-spacing:.04em}
+.ifr-t td.t-val{font-size:1.22em;text-align:right;white-space:nowrap}
+.ifr-pay{display:grid;grid-template-columns:repeat(auto-fit,minmax(14em,1fr));gap:.6em 1.4em}
+.ifr-ft{margin-top:auto;display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:.8em;align-items:end;padding-top:2.2em}
+.ifr-sig{font-family:Archivo,"Arial Narrow",sans-serif;font-weight:800;font-stretch:85%;color:var(--ib);font-size:1.17em;text-align:center}
+.ifr-sig span{display:block;border-top:.75px solid var(--im);margin:3.5em .4em .3em}
+.ifr-nb{font-family:Archivo,"Arial Narrow",sans-serif;font-stretch:88%;font-size:1em;text-align:center;padding-bottom:.3em}
+.ifr-nb i{color:var(--ib);font-weight:700}
+.ifr-meta{font-size:.8em;color:var(--im);text-align:center}
+.ifr-void{position:absolute;top:40%;left:50%;transform:translate(-50%,-50%) rotate(-14deg);border:3px solid var(--ir);color:var(--ir);font-family:Archivo,sans-serif;font-weight:800;font-size:3em;letter-spacing:.12em;padding:.05em .5em;border-radius:.2em;opacity:.75;pointer-events:none}
+@media (max-width:600px){.ifr{font-size:11.5px;padding:1.2em .9em}.ifr-ft{grid-template-columns:1fr 1fr}.ifr-nb{grid-column:1/-1;order:-1}.ifr-t{min-width:0}.ifr-t th{white-space:normal;font-size:1em;padding:.45em .4em}.ifr-t td{padding:.45em .4em}.ifr-t .c-no{width:1.8em}.ifr-t .c-q{width:2.6em}.ifr-t .c-pu,.ifr-t .c-pt{width:auto}}
+#print-area{display:none}
 @media print{
+  @page{size:A4;margin:0}
   :root{padding:0}
-  body{background:#fff;color:#000}
-  .app,.tabbar,.toast,#gate{display:none!important}
-  body.locked{overflow:visible}
-  .scrim{position:static;background:none;padding:0;overflow:visible;display:block}
-  .scrim:not(:last-child){display:none}
-  .modal{box-shadow:none;max-width:none;border-radius:0}
-  .modal-h,.modal-f,.noprint{display:none!important}
-  .modal-b{padding:0}
-  .inv{border:0;padding:0}
-  .inv .tbl th,.inv .tbl td{color:#000}
+  html,body{background:#fff}
+  body.printing > *:not(#print-area){display:none!important}
+  body.printing #print-area{display:block}
+  #print-area .ifr{width:210mm;min-height:296mm;padding:14mm 14mm 11mm;border:0;border-radius:0;font-size:10.6pt;gap:4.4mm}
+  #print-area .ifr-t{min-width:0}
+  #print-area .ifr-tw{overflow:visible}
+  #print-area .ifr-ft{grid-template-columns:1fr 1.6fr 1fr}
+  #print-area .ifr-nb{grid-column:auto;order:0}
 }
 </style>
 </head>

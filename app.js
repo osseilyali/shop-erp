@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-19 · 5';
+const APP_VERSION = '2026-11-23 · 6';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -258,7 +258,10 @@ function periodStats(pred){
   const pays = D.payments.filter(p => !p.void && pred(p.date));
   return {ss, ex, pays, count: ss.length, revenue, cogs, gross, expenses, net: gross - expenses, margin: revenue > 0 ? gross / revenue : 0, cashIn: sum(ss, s => s.paid) + sum(pays, p => p.amount)};
 }
-const shopName = () => (S.settings.shopName || '').trim() || 'Your shop';
+// Shop details printed on invoices. Empty settings fall back to the shop's paper invoice book.
+const SHOP_DEFAULTS = {shopName: 'OSSEILY GROUP', tagline: 'Tout pour le bâtiment · Électroménager · Plomberie', address: 'Madina Boussoura, Route du Niger, en face du Centre Alpha Amadou', phone: '(+224) 624 00 27 38 / 628 20 00 00', email: 'osseilyali@gmail.com', city: 'Conakry', footer: 'Les marchandises vendues ne sont ni reprises, ni échangées'};
+function shopInfo(){ const o = {}; for (const k of Object.keys(SHOP_DEFAULTS)){ const v = S.settings[k]; o[k] = v != null && String(v).trim() !== '' ? String(v) : SHOP_DEFAULTS[k]; } return o; }
+const shopName = () => (shopInfo().shopName || '').trim() || 'Your shop';
 const initials = () => { const w = shopName().split(/\s+/).filter(Boolean); return ((w[0] || 'S')[0] + ((w[1] || '')[0] || '')).toUpperCase(); };
 const mySeries = () => ((S.members[S.email] || {}).code || (OWNERS.includes(S.email) ? ownerLetter(S.email) : 'A')).toUpperCase();
 function usedCodes(except){
@@ -266,9 +269,9 @@ function usedCodes(except){
   OWNERS.forEach(e => { if (e !== except && !S.members[e]) used.add(ownerLetter(e)); });
   return used;
 }
-const invNo = (no, series) => `${(S.settings.prefix || 'F').trim() || 'F'}-${series || 'A'}-${String(no || 0).padStart(5, '0')}`;
+const invNo = (no, series) => `${series || 'A'}-${String(no || 0).padStart(6, '0')}`;
 const invNoS = s => invNo(s.no, s.series);
-const nextNo = () => (D.maxNoBy[mySeries()] || 0) + 1;
+const nextNo = () => Math.max((D.maxNoBy[mySeries()] || 0) + 1, parseInt(S.settings.invoiceStart, 10) || 1);
 const custName = s => s.customerId ? ((S.customers[s.customerId] || {}).name || 'Removed customer') : (s.walkin || 'Walk-in customer');
 const prodName = id => (S.products[id] || {}).name || 'Removed product';
 const prodLabel = (id, p) => { p = p || S.products[id]; return p ? (p.sku ? `${p.name} · ${p.sku}` : p.name) : ''; };
@@ -1131,17 +1134,21 @@ VIEWS.team = function(){
 };
 
 VIEWS.shop = function(){
-  if (!UI.shop) UI.shop = {shopName:'', address:'', phone:'', prefix:'F', footer:'', ...S.settings};
+  if (!UI.shop) UI.shop = {...shopInfo(), invoiceStart: S.settings.invoiceStart != null ? String(S.settings.invoiceStart) : ''};
   const f = UI.shop;
   const counts = `${Object.keys(S.products).length} products · ${D.sales.length} invoices · ${Object.keys(S.purchases).length} purchases · ${Object.keys(S.customers).length} customers`;
+  const startN = parseInt(f.invoiceStart, 10) || 1, nextShown = invNo(Math.max((D.maxNoBy[mySeries()] || 0) + 1, startN), mySeries());
   return header('Setup', 'Shop settings') +
-  `<section class="panel"><div class="panel-h"><h2>Shop details</h2><span class="sub">Printed at the top of every invoice</span></div><div class="panel-b stack"><div class="form">
-    <div class="field"><label for="sh-name">Shop name</label><input id="sh-name" class="inp" value="${esc(f.shopName)}" data-bind="shop.shopName" placeholder="e.g. Barry Électroménager & Plomberie"></div>
-    <div class="field"><label for="sh-phone">Phone</label><input id="sh-phone" class="inp" value="${esc(f.phone)}" data-bind="shop.phone" placeholder="+224 6xx xx xx xx"></div>
-    <div class="field full"><label for="sh-addr">Address</label><input id="sh-addr" class="inp" value="${esc(f.address)}" data-bind="shop.address" placeholder="Marché Madina, Conakry"></div>
-    <div class="field"><label for="sh-prefix">Invoice prefix</label><input id="sh-prefix" class="inp" value="${esc(f.prefix)}" data-bind="shop.prefix" maxlength="6"><span class="hint">Invoices look like ${esc((f.prefix || 'F').trim() || 'F')}-A-00001</span></div>
-    <div class="field full"><label for="sh-foot">Invoice footer</label><input id="sh-foot" class="inp" value="${esc(f.footer)}" data-bind="shop.footer" placeholder="Warranty, return policy or a thank-you line"></div>
-  </div><div><button type="button" class="btn primary" data-act="saveShop">Save shop details</button></div></div></section>
+  `<section class="panel"><div class="panel-h"><h2>Invoice details</h2><span class="sub">Printed on every invoice, in French</span></div><div class="panel-b stack"><div class="form">
+    <div class="field"><label for="sh-name">Shop name</label><input id="sh-name" class="inp" value="${esc(f.shopName)}" data-bind="shop.shopName"></div>
+    <div class="field"><label for="sh-tag">Line under the name</label><input id="sh-tag" class="inp" value="${esc(f.tagline)}" data-bind="shop.tagline"></div>
+    <div class="field full"><label for="sh-addr">Address</label><input id="sh-addr" class="inp" value="${esc(f.address)}" data-bind="shop.address"></div>
+    <div class="field"><label for="sh-phone">Phone numbers</label><input id="sh-phone" class="inp" value="${esc(f.phone)}" data-bind="shop.phone"><span class="hint">Shown in the blue band, after “Tél :”</span></div>
+    <div class="field"><label for="sh-mail">Email</label><input id="sh-mail" class="inp" type="email" value="${esc(f.email)}" data-bind="shop.email"></div>
+    <div class="field"><label for="sh-city">City</label><input id="sh-city" class="inp" value="${esc(f.city)}" data-bind="shop.city"><span class="hint">“${esc(f.city || 'Conakry')}, le ${frDate(todayStr())}”</span></div>
+    <div class="field"><label for="sh-start">Number invoices from</label><input id="sh-start" class="inp n" inputmode="numeric" value="${esc(f.invoiceStart)}" data-bind="shop.invoiceStart" data-rr placeholder="1"><span class="hint">Your next invoice: ${esc(nextShown)}. Use this to continue after the paper book.</span></div>
+    <div class="field full"><label for="sh-foot">Note at the bottom</label><input id="sh-foot" class="inp" value="${esc(f.footer)}" data-bind="shop.footer"><span class="hint">Printed after “NB :”</span></div>
+  </div><div><button type="button" class="btn primary" data-act="saveShop">Save invoice details</button></div></div></section>
   <div class="grid2">
     <section class="panel"><div class="panel-h"><h2>Your account</h2></div><div class="panel-b stack">
       <p>Signed in as <b>${esc(S.email)}</b>${S.isOwner ? ' (owner)' : ''}. Your invoices use the letter <b>${esc(mySeries())}</b>.</p>
@@ -1167,7 +1174,7 @@ const MODALS = [], MODAL_BY_EL = new Map();
 function openModal(cfg){
   const m = Object.assign({state:{}, acts:{}, ins:{}}, cfg);
   const scrim = document.createElement('div'); scrim.className = 'scrim';
-  scrim.innerHTML = `<div class="modal${cfg.wide ? ' wide' : ''}" role="dialog" aria-modal="true" tabindex="-1"><div class="modal-h"><h2></h2><button type="button" class="btn ghost iconbtn" data-close aria-label="Close">${ic('x')}</button></div><div class="modal-b"></div><div class="modal-f"></div></div>`;
+  scrim.innerHTML = `<div class="modal${cfg.wide ? ' wide' : cfg.mid ? ' mid' : ''}" role="dialog" aria-modal="true" tabindex="-1"><div class="modal-h"><h2></h2><button type="button" class="btn ghost iconbtn" data-close aria-label="Close">${ic('x')}</button></div><div class="modal-b"></div><div class="modal-f"></div></div>`;
   m.el = scrim; m.hEl = scrim.querySelector('h2'); m.bEl = scrim.querySelector('.modal-b'); m.fEl = scrim.querySelector('.modal-f');
   m.render = () => { const top = scrim.scrollTop; withFocus(scrim, () => { m.hEl.textContent = m.title(); m.bEl.innerHTML = m.body(); const f = m.foot ? m.foot() : ''; m.fEl.innerHTML = f; m.fEl.hidden = !f; }); scrim.scrollTop = top; };
   m.close = () => closeModal(m);
@@ -1567,42 +1574,110 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
 }
 
 /* ----- invoice ----- */
+// Amount in French words, traditional spelling (as written on Guinean invoices).
+function enLettres(n){
+  n = Math.round(Math.abs(n));
+  if (n === 0) return 'zéro';
+  const U = ['','un','deux','trois','quatre','cinq','six','sept','huit','neuf','dix','onze','douze','treize','quatorze','quinze','seize','dix-sept','dix-huit','dix-neuf'];
+  const T = ['','dix','vingt','trente','quarante','cinquante','soixante'];
+  const below100 = x => {
+    if (x < 20) return U[x];
+    if (x < 70){ const t = Math.floor(x / 10), u = x % 10; return T[t] + (u === 1 ? ' et un' : u ? '-' + U[u] : ''); }
+    if (x < 80) return 'soixante' + (x === 71 ? ' et onze' : '-' + U[x - 60]);
+    if (x === 80) return 'quatre-vingts';
+    return 'quatre-vingt-' + U[x - 80];
+  };
+  const below1000 = (x, last) => {
+    const c = Math.floor(x / 100), r = x % 100;
+    let s = c === 0 ? '' : c === 1 ? 'cent' : U[c] + ' cent' + (r === 0 && last ? 's' : '');
+    if (r) s += (s ? ' ' : '') + (r === 80 && !last ? 'quatre-vingt' : below100(r));
+    return s;
+  };
+  const parts = [];
+  const mds = Math.floor(n / 1e9), mns = Math.floor(n / 1e6) % 1000, ms = Math.floor(n / 1000) % 1000, rest = n % 1000;
+  if (mds) parts.push((mds === 1 ? 'un' : below1000(mds, true)) + ' milliard' + (mds > 1 ? 's' : ''));
+  if (mns) parts.push((mns === 1 ? 'un' : below1000(mns, true)) + ' million' + (mns > 1 ? 's' : ''));
+  if (ms) parts.push(ms === 1 ? 'mille' : below1000(ms, false) + ' mille');
+  if (rest) parts.push(below1000(rest, true));
+  return parts.join(' ');
+}
+const frNum = v => new Intl.NumberFormat('fr-FR', {maximumFractionDigits: 0}).format(Math.round(v || 0)).replace(/[  ]/g, ' ');
+const frQty = v => new Intl.NumberFormat('fr-FR', {maximumFractionDigits: 2}).format(r3(v || 0)).replace(/[  ]/g, ' ');
+const frDate = d => { if (!d) return ''; const [y, m, dd] = d.split('-'); return `${dd}/${m}/${y}`; };
+const METHOD_FR = {'Cash': 'Espèces', 'Bank transfer': 'Virement bancaire', 'Cheque': 'Chèque', 'Other': 'Autre'};
+function payLabelFr(r){
+  const a = r.accountId && S.accounts[r.accountId];
+  if (a) return ['cash', 'safe'].includes(a.type) ? 'Espèces' : a.name;
+  return METHOD_FR[r.method] || r.method || 'Espèces';
+}
+const montantEnLettres = v => { const w = enLettres(v); return w.charAt(0).toUpperCase() + w.slice(1) + ' francs guinéens'; };
+// The invoice, laid out like the shop's paper invoice book. Same markup on screen and on the printed A4 page.
+function invoiceSheet(s){
+  const sh = shopInfo(), k = s.customerId ? S.customers[s.customerId] : null;
+  const rem = Math.max(0, D.invRemain[s.id] || 0), paid = s.total - rem;
+  const client = [custName(s), k && k.address].filter(Boolean).join(' — ');
+  return `<div class="ifr">
+    <div class="ifr-hd">
+      <div class="ifr-name">${esc(sh.shopName)}</div>
+      ${sh.tagline ? `<div class="ifr-tag">${esc(sh.tagline)}</div>` : ''}
+      ${sh.address ? `<div class="ifr-addr">${esc(sh.address)}</div>` : ''}
+      ${sh.phone ? `<div class="ifr-tel">Tél : ${esc(sh.phone)}</div>` : ''}
+      ${sh.email ? `<div class="ifr-mail">E-mail : ${esc(sh.email)}</div>` : ''}
+    </div>
+    <div class="ifr-row"><div class="ifr-fact">FACTURE <span class="ifr-no">N° ${esc(invNoS(s))}</span></div><div class="ifr-date">${esc(sh.city)}, le <b>${frDate(s.date)}</b></div></div>
+    <div class="ifr-line"><span class="ifr-lbl">Nom et Adresse du Client :</span><span class="ifr-fill">${esc(client)}</span></div>
+    <div class="ifr-line"><span class="ifr-lbl">Tél :</span><span class="ifr-fill">${esc((k && k.phone) || '')}</span></div>
+    <div class="ifr-tw"><table class="ifr-t"><thead><tr><th class="c-no">N°</th><th>DÉSIGNATIONS</th><th class="c-q">Qté</th><th class="c-pu">P. UNITAIRE</th><th class="c-pt">Prix Total</th></tr></thead><tbody>
+      ${s.items.map((i, x) => { const d = itemDetail(i); return `<tr><td class="c-no">${x + 1}</td><td>${esc(i.name)}${d ? `<small>${esc(d)}</small>` : ''}</td><td class="c-q">${frQty(i.qty)}</td><td class="c-pu">${frNum(i.price)}</td><td class="c-pt">${frNum(i.qty * i.price)}</td></tr>`; }).join('')}
+      ${s.discount ? `<tr class="ifr-sub"><td colspan="3" class="t-lbl2">Sous-total</td><td colspan="2" class="t-val2">${frNum(s.subtotal)} GNF</td></tr><tr class="ifr-sub"><td colspan="3" class="t-lbl2">Remise</td><td colspan="2" class="t-val2">− ${frNum(s.discount)} GNF</td></tr>` : ''}
+      <tr class="tot"><td colspan="3" class="t-lbl">TOTAL</td><td colspan="2" class="t-val">${frNum(s.total)} GNF</td></tr>
+    </tbody></table></div>
+    <div class="ifr-pay">
+      <div class="ifr-line"><span class="ifr-lbl">Payé :</span><span class="ifr-fill">${frNum(paid)} GNF${paid > 0 ? ` <span class="ifr-m">(${esc(payLabelFr(s))})</span>` : ''}</span></div>
+      <div class="ifr-line"><span class="ifr-lbl">Reste à payer :</span><span class="ifr-fill">${frNum(rem)} GNF</span></div>
+    </div>
+    <div class="ifr-line"><span class="ifr-lbl">Arrête la présente Facture à la somme de :</span></div>
+    <div class="ifr-line ifr-words"><span class="ifr-fill">${esc(montantEnLettres(s.total))} (${frNum(s.total)} GNF)</span></div>
+    ${s.note ? `<div class="ifr-line"><span class="ifr-lbl">Note :</span><span class="ifr-fill">${esc(s.note)}</span></div>` : ''}
+    <div class="ifr-ft"><div class="ifr-sig"><span></span>Le Gérant</div><div class="ifr-nb">${sh.footer ? `<i>NB :</i> ${esc(sh.footer)}` : ''}</div><div class="ifr-sig"><span></span>Le Client</div></div>
+    <div class="ifr-meta">Servi par ${esc(staffName(s.by).replace(' (you)', ''))}</div>
+    ${s.void ? '<div class="ifr-void">ANNULÉE</div>' : ''}
+  </div>`;
+}
+function printInvoice(s){
+  let pa = document.getElementById('print-area');
+  if (!pa){ pa = document.createElement('div'); pa.id = 'print-area'; document.body.appendChild(pa); }
+  pa.innerHTML = invoiceSheet(s);
+  const title = document.title; document.title = `Facture ${invNoS(s)}`;
+  document.body.classList.add('printing');
+  const done = () => { document.body.classList.remove('printing'); pa.innerHTML = ''; document.title = title; window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  try { window.print(); } catch { toast('Printing isn’t available in this browser.'); done(); }
+}
+// Text version for WhatsApp or SMS, in the same order as the printed invoice.
 function invoiceText(s){
-  const L = [shopName(), [S.settings.address, S.settings.phone].filter(Boolean).join(' · '), '', `Invoice ${invNoS(s)} · ${fdate(s.date)}`, `Customer: ${custName(s)}`, ''];
-  s.items.forEach(i => { const d = itemDetail(i); L.push(`${qtyFmt(i.qty)} × ${i.name}${d ? ` (${d})` : ''} @ ${money(i.price)} = ${money(i.qty * i.price)}`); });
+  const sh = shopInfo(), k = s.customerId ? S.customers[s.customerId] : null;
+  const rem = Math.max(0, D.invRemain[s.id] || 0), paid = s.total - rem;
+  const L = [sh.shopName, sh.tagline, [sh.address, sh.phone ? 'Tél : ' + sh.phone : ''].filter(Boolean).join(' · '), '',
+    `FACTURE N° ${invNoS(s)} · ${sh.city}, le ${frDate(s.date)}`,
+    `Client : ${[custName(s), k && k.address].filter(Boolean).join(' — ')}${k && k.phone ? ' · Tél : ' + k.phone : ''}`, ''];
+  s.items.forEach((i, x) => { const d = itemDetail(i); L.push(`${x + 1}. ${i.name}${d ? ` (${d})` : ''} : ${frQty(i.qty)} × ${frNum(i.price)} = ${frNum(i.qty * i.price)}`); });
   L.push('');
-  if (s.discount) L.push(`Discount: −${money(s.discount)}`);
-  L.push(`TOTAL: ${money(s.total)} GNF`, `Paid: ${money(s.paid)} GNF (${s.method || 'Cash'})`);
-  if (s.total - s.paid > 0.5) L.push(`Balance due: ${money(s.total - s.paid)} GNF`);
-  if (S.settings.footer) L.push('', S.settings.footer);
-  return L.filter((x, i, a) => !(x === '' && a[i - 1] === '')).join('\n');
+  if (s.discount) L.push(`Sous-total : ${frNum(s.subtotal)} GNF`, `Remise : − ${frNum(s.discount)} GNF`);
+  L.push(`TOTAL : ${frNum(s.total)} GNF`, `Payé : ${frNum(paid)} GNF${paid > 0 ? ` (${payLabelFr(s)})` : ''}`, `Reste à payer : ${frNum(rem)} GNF`);
+  L.push(`Arrête la présente Facture à la somme de : ${montantEnLettres(s.total)}`);
+  if (sh.footer) L.push('', 'NB : ' + sh.footer);
+  return L.filter((x, i, a) => x !== undefined && !(x === '' && a[i - 1] === '')).join('\n');
 }
 function invoiceModal(saleId){
   const st = {confirm:false, showText:false};
   const find = () => D.sales.find(s => s.id === saleId);
   const m = openModal({
-    state: st, live: true,
+    state: st, live: true, mid: true,
     title: () => { const s = find(); return s ? `Invoice ${invNoS(s)}` : 'Invoice'; },
     body: () => {
       const s = find(); if (!s) return `<p class="sub">This invoice isn’t available.</p>`;
-      const k = s.customerId ? S.customers[s.customerId] : null;
-      const rem = D.invRemain[s.id] || 0;
-      return `<div class="inv">
-        <div class="inv-head"><div><div class="inv-shop">${esc(shopName())}</div><div class="sub">${esc([S.settings.address, S.settings.phone].filter(Boolean).join(' · ') || 'Add your address and phone in Shop settings')}</div></div>
-          <div class="inv-meta"><div class="mono">${invNoS(s)}</div><div class="sub">${fdate(s.date)}${s.at ? ' · ' + timeOf(s.at) : ''}</div></div></div>
-        <div><span class="lbl">Billed to</span><div><b>${esc(custName(s))}</b>${k && k.phone ? ` <span class="sub">· ${esc(k.phone)}</span>` : ''}</div></div>
-        <div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${s.items.map(i => `<tr><td>${esc(i.name)}${itemDetail(i) ? `<span class="sub">${esc(itemDetail(i))}</span>` : ''}</td><td class="n">${qtyFmt(i.qty)}</td><td class="n">${money(i.price)}</td><td class="n">${money(i.qty * i.price)}</td></tr>`).join('')}</tbody></table></div>
-        <div class="totals">
-          ${s.discount ? `<div class="row"><span class="muted">Subtotal</span><span>${money(s.subtotal)}</span></div><div class="row"><span class="muted">Discount</span><span>−${money(s.discount)}</span></div>` : ''}
-          <div class="row grand"><span>Total</span><span>${money(s.total)} <small class="sub">GNF</small></span></div>
-          <div class="row"><span class="muted">Paid at the counter · ${esc(s.method || 'Cash')}</span><span>${money(s.paid)}</span></div>
-          ${s.total - s.paid > 0.5 ? `<div class="row"><span class="muted">Given on credit</span><span>${money(s.total - s.paid)}</span></div><div class="row"><b>Still owed on this invoice</b><b>${rem > 0.5 ? money(rem) + ' GNF' : 'Settled'}</b></div>` : ''}
-        </div>
-        ${s.note ? `<p class="sub">Note: ${esc(s.note)}</p>` : ''}
-        ${S.settings.footer ? `<p class="sub" style="text-align:center">${esc(S.settings.footer)}</p>` : ''}
-        <p class="hint">Served by ${esc(staffName(s.by))}</p>
-        ${s.void ? '<div class="stamp">VOID</div>' : ''}
-      </div>
+      return `${invoiceSheet(s)}
       ${st.showText ? `<div class="field noprint"><label for="inv-text">Copy this text into WhatsApp or SMS</label><textarea id="inv-text" class="inp copytext" readonly>${esc(invoiceText(s))}</textarea></div>` : ''}`;
     },
     foot: () => { const s = find(); if (!s) return '';
@@ -1612,7 +1687,7 @@ function invoiceModal(saleId){
       copy: () => { const s = find(); if (!s) return; const txt = invoiceText(s);
         const fallback = () => { st.showText = true; m.render(); const t = document.getElementById('inv-text'); if (t){ t.focus(); t.select(); } };
         try { navigator.clipboard.writeText(txt).then(() => toast('Invoice copied. Paste it into WhatsApp or SMS.'), fallback); } catch { fallback(); } },
-      print: () => { try { window.print(); } catch { toast('Printing isn’t available in this browser.'); } },
+      print: () => { const s = find(); if (s) printInvoice(s); },
       toCustomer: () => { const s = find(); if (s && s.customerId){ m.close(); customerDetail(s.customerId); } },
       voidAsk: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
       voidYes: async () => { const s = find(); if (!s) return; if (await write([{col:'sales', id:s.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Sale voided')){ st.confirm = false; m.render(); } }
@@ -1801,8 +1876,10 @@ const ACT = {
   cancelExp: () => { UI.confirmExp = ''; renderView(); },
   voidExpense: async el => { if (await write([{col:'expenses', id:el.dataset.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Expense removed')){ UI.confirmExp = ''; renderView(); } },
   saveShop: async () => {
-    const f = UI.shop; const doc = {shopName: (f.shopName || '').trim(), address: (f.address || '').trim(), phone: (f.phone || '').trim(), prefix: (f.prefix || '').trim() || 'F', footer: (f.footer || '').trim()};
-    if (await write([{col:'config', id:'settings', data:doc}], 'Shop details saved')) UI.shop = null;
+    const f = UI.shop;
+    if (String(f.invoiceStart || '').trim() && !/^\d{1,9}$/.test(String(f.invoiceStart).trim())) return toast('“Number invoices from” must be a whole number, like 362.');
+    const doc = {shopName: (f.shopName || '').trim(), tagline: (f.tagline || '').trim(), address: (f.address || '').trim(), phone: (f.phone || '').trim(), email: (f.email || '').trim(), city: (f.city || '').trim(), footer: (f.footer || '').trim(), invoiceStart: parseInt(f.invoiceStart, 10) || null};
+    if (await write([{col:'config', id:'settings', data:doc}], 'Invoice details saved')) UI.shop = null;
   },
   backupJson: () => {
     const dump = {format: 'shop-erp-v1', exportedAt: nowIso(), settings: S.settings};
@@ -1900,4 +1977,4 @@ function boot(){
 boot();
 
 // Exposed for automated checks only; nothing in the app depends on it.
-window.__erp = { S, D: () => D, RAW, LIVE, purchaseCalc, parseNum, importClaude };
+window.__erp = { S, D: () => D, RAW, LIVE, purchaseCalc, parseNum, importClaude, enLettres, invoiceText: id => invoiceText(D.sales.find(x => x.id === id)) };
