@@ -17,8 +17,8 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-23 · 9';
-const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates'];
+const APP_VERSION = '2026-11-23 · 10';
+const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates','debts'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
 const METHOD_ACC = {'Cash':'cash', 'Orange Money':'orange', 'MTN MoMo':'mtn', 'Bank transfer':'bank', 'Cheque':'bank'};
@@ -112,7 +112,7 @@ const LIVE = {};
 const S = {
   auth:'loading', user:null, email:'', isOwner:false, fs:null, authObj:null,
   cacheLoaded:false, slow:false, online:navigator.onLine, unsynced:false, listenErr:'', installEvt:null, updateReady:false,
-  settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}, accounts:{}, transfers:{}, equity:{}, cashcounts:{}, rates:{}
+  settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}, accounts:{}, transfers:{}, equity:{}, cashcounts:{}, rates:{}, debts:{}
 };
 const freshCart = () => ({items:[], customerId:'', walkin:'', discount:'', paid:'', paidTouched:false, method:'Cash', accountId:'', date:todayStr(), note:'', q:''});
 const UI = {
@@ -203,12 +203,14 @@ function derive(){
   let transitValue = 0, transitCount = 0;
   for (const [id, p] of Object.entries(S.purchases)) if (p.status !== 'received'){ transitValue += pc[id].landed; transitCount++; }
   const custBal = {};
+  const debts = Object.entries(S.debts).filter(([, d]) => d && !d.void && d.customerId && +d.amount > 0).map(([id, d]) => ({...d, id, amount: +d.amount, balance: +d.amount, date: d.date || '', isDebt: true}));
+  for (const d of debts) custBal[d.customerId] = (custBal[d.customerId] || 0) + d.amount;
   for (const s of sales){ if (s.void || !s.customerId) continue; custBal[s.customerId] = (custBal[s.customerId] || 0) + s.balance; }
   for (const p of payments){ if (p.void || !p.customerId) continue; custBal[p.customerId] = (custBal[p.customerId] || 0) - p.amount; }
   // later payments settle the oldest unpaid invoices first
   const invRemain = {}, pools = {};
   for (const p of payments) if (!p.void && p.customerId) pools[p.customerId] = (pools[p.customerId] || 0) + p.amount;
-  const asc = sales.filter(s => !s.void && s.balance > 0.5).slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : String(a.at || '').localeCompare(String(b.at || '')));
+  const asc = [...debts, ...sales.filter(s => !s.void && s.balance > 0.5)].sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : String(a.at || '').localeCompare(String(b.at || '')));
   for (const s of asc){
     if (!s.customerId){ invRemain[s.id] = s.balance; continue; }
     const pool = pools[s.customerId] || 0, take = Math.min(pool, s.balance);
@@ -252,7 +254,7 @@ function derive(){
   }
   // dollar rate: set by hand, one entry per day; the newest day wins
   const rateHist = Object.entries(S.rates).map(([id, r]) => ({id, date: r.date || id, rate: +r.rate || 0, by: r.by, at: r.at})).filter(r => r.rate > 0).sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : String(b.at || '').localeCompare(String(a.at || '')));
-  D = {sales, expenses, payments, prod, pc, maxNoBy, stockValue, transitValue, transitCount, custBal, supBal, invRemain, acc, extraCosts, rateHist, rate: rateHist[0] || null};
+  D = {debts, sales, expenses, payments, prod, pc, maxNoBy, stockValue, transitValue, transitCount, custBal, supBal, invRemain, acc, extraCosts, rateHist, rate: rateHist[0] || null};
 }
 derive();
 
@@ -788,7 +790,7 @@ VIEWS.customers = function(){
   rows.sort((a, b) => ((D.custBal[b[0]] || 0) - (D.custBal[a[0]] || 0)) || String(a[1].name).localeCompare(String(b[1].name)));
   const owed = sum(Object.entries(D.custBal).filter(([id]) => S.customers[id]), ([, b]) => Math.max(0, b));
   const n = Object.entries(D.custBal).filter(([id, b]) => b > 0.5 && S.customers[id]).length;
-  return header('Money', 'Customers & credit', `<button type="button" class="btn primary" data-act="newCustomer">${ic('plus')}Add customer</button>`) +
+  return header('Money', 'Customers & credit', `${S.isOwner ? `<button type="button" class="btn" data-act="oldDebts">Enter old debts</button>` : ''}<button type="button" class="btn primary" data-act="newCustomer">${ic('plus')}Add customer</button>`) +
   `<div class="toolbar"><div class="search">${ic('search')}<input id="cust-q" class="inp" type="search" placeholder="Name or phone" value="${esc(UI.custQ)}" data-bind="custQ" data-rr aria-label="Search customers"></div><span class="sub">${n ? `${n} customer${n === 1 ? '' : 's'} owe a total of <b>${money(owed)} GNF</b>` : 'No one owes you money right now.'}</span></div>
   <section class="panel">${rows.length ? `<div class="list">${rows.map(([id, k]) => { const b = D.custBal[id] || 0; return `<button type="button" class="li" data-act="openCustomer" data-id="${id}"><span class="nm"><b>${esc(k.name)}</b><span class="sub">${esc(k.phone || 'No phone')}${last[id] ? ` · last bought ${fdate(last[id])}` : ''}</span></span><span class="amt">${b > 0.5 ? `<span class="pill bad">Owes ${money(b)}</span>` : b < -0.5 ? `<span class="pill accent">Credit ${money(-b)}</span>` : '<span class="pill good">Settled</span>'}</span></button>`; }).join('')}</div>`
     : emptyBox(Object.keys(S.customers).length ? 'No match' : 'No customers yet', Object.keys(S.customers).length ? 'No customer matches your search.' : 'Add regular buyers, plumbers and contractors so credit sales are tracked by name.', Object.keys(S.customers).length ? '' : `<button type="button" class="btn primary sm" data-act="newCustomer">${ic('plus')}Add customer</button>`)}</section>`;
@@ -1342,8 +1344,67 @@ function customerForm(id, onSaved){
     }
   });
 }
+const findCust = name => { const t = String(name || '').trim().toLowerCase(); if (!t) return ''; const e = Object.entries(S.customers).find(([, k]) => String(k.name || '').trim().toLowerCase() === t); return e ? e[0] : ''; };
+const OLD_DEBT_HELP = 'What the customer still owed before you started using the app. It’s added to what they owe, but isn’t a sale, isn’t counted in profit and doesn’t change any money account. Their payments settle the oldest debt first.';
+function oldDebtModal(customerId){
+  const st = {amount: '', date: todayStr(), note: ''};
+  const m = openModal({state: st, title: () => `Old debt · ${(S.customers[customerId] || {}).name || ''}`,
+    body: () => `<p class="sub">${OLD_DEBT_HELP}</p><div class="form">
+      <div class="field"><label for="odm-a">Amount owed (GNF)</label><input id="odm-a" class="inp n" inputmode="decimal" value="${esc(st.amount)}" data-bind="amount" placeholder="0"></div>
+      <div class="field"><label for="odm-d">Owed as of</label><input id="odm-d" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
+      <div class="field full"><label for="odm-n">Note</label><input id="odm-n" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="e.g. Paper invoice 000312, old notebook"></div></div>`,
+    foot: () => '<button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Save old debt</button>',
+    acts: { save: async () => {
+      const a = num(st.amount); if (!(a > 0)) return toast('Enter the amount owed.');
+      if (await write([{col:'debts', id: uid(), merge:false, data:{customerId, amount: a, date: st.date || todayStr(), note: st.note.trim(), by: S.email, at: nowIso()}}], `Old debt of ${money(a)} GNF saved`)) m.close();
+    } }
+  });
+}
+function oldDebtsBulk(){
+  const blank = () => ({name: '', phone: '', amount: '', note: ''});
+  const st = {date: todayStr(), rows: [blank(), blank(), blank(), blank(), blank()]};
+  const m = openModal({state: st, wide: true, live: true, title: () => 'Old debts from before the app',
+    body: () => {
+      const filled = st.rows.filter(r => r.name.trim() && num(r.amount) > 0);
+      return `<p class="sub">${OLD_DEBT_HELP} Type a name: if it matches a customer already in the app, the debt goes to them; otherwise a new customer is created.</p>
+      <div class="field" style="max-width:240px"><label for="od-date">Owed as of</label><input id="od-date" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
+      <datalist id="od-custs">${sortedBy(S.customers).map(([, k]) => `<option value="${esc(k.name)}">`).join('')}</datalist>
+      <div class="scroll"><table class="tbl"><thead><tr><th>Customer</th><th>Phone</th><th class="n">Amount owed (GNF)</th><th>Note</th><th></th></tr></thead><tbody>
+      ${st.rows.map((r, i) => { const ex = findCust(r.name); return `<tr>
+        <td style="min-width:190px"><input id="od-n-${i}" class="inp" list="od-custs" value="${esc(r.name)}" data-bind="rows.${i}.name" data-rr autocomplete="off" aria-label="Customer name">${r.name.trim() ? `<span class="sub">${ex ? 'Already in the app' + ((D.custBal[ex] || 0) > 0.5 ? ` · owes ${money(D.custBal[ex])}` : '') : 'New customer'}</span>` : ''}</td>
+        <td style="min-width:140px"><input id="od-p-${i}" class="inp" value="${esc(ex ? (S.customers[ex].phone || '') : r.phone)}" data-bind="rows.${i}.phone"${ex ? ' disabled' : ''} placeholder="+224 …" aria-label="Phone"></td>
+        <td style="min-width:140px"><input id="od-a-${i}" class="inp n" inputmode="decimal" value="${esc(r.amount)}" data-bind="rows.${i}.amount" data-rr placeholder="0" aria-label="Amount owed"></td>
+        <td style="min-width:160px"><input id="od-x-${i}" class="inp" value="${esc(r.note)}" data-bind="rows.${i}.note" placeholder="e.g. Paper invoice 000312" aria-label="Note"></td>
+        <td><button type="button" class="btn ghost sm iconbtn" data-act="rm" data-i="${i}" aria-label="Remove row">${ic('x')}</button></td></tr>`; }).join('')}
+      </tbody></table></div>
+      <div class="inline" style="justify-content:space-between"><button type="button" class="btn sm" data-act="add">${ic('plus')}Add 5 rows</button><span class="sub">Total <b>${money(sum(filled, r => num(r.amount)))} GNF</b> from ${filled.length} customer${filled.length === 1 ? '' : 's'}</span></div>`;
+    },
+    foot: () => '<button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Save old debts</button>',
+    acts: {
+      add: () => { for (let i = 0; i < 5; i++) st.rows.push(blank()); m.render(); },
+      rm: el => { st.rows.splice(+el.dataset.i, 1); if (!st.rows.length) st.rows.push(blank()); m.render(); },
+      save: async () => {
+        const rows = st.rows.filter(r => r.name.trim() || String(r.amount).trim());
+        if (!rows.length) return toast('Enter at least one customer and the amount they owe.');
+        for (const r of rows){
+          if (!r.name.trim()) return toast('A row has an amount but no customer name.');
+          if (!(num(r.amount) > 0)) return toast(`Enter the amount ${r.name.trim()} owes.`);
+        }
+        const ops = [], made = {};
+        for (const r of rows){
+          const key = r.name.trim().toLowerCase();
+          let cid = findCust(r.name) || made[key];
+          if (!cid){ cid = uid(); made[key] = cid; ops.push({col:'customers', id: cid, merge:false, data:{name: r.name.trim(), phone: r.phone.trim(), address: '', note: '', createdAt: nowIso(), editedAt: nowIso()}}); }
+          ops.push({col:'debts', id: uid(), merge:false, data:{customerId: cid, amount: num(r.amount), date: st.date || todayStr(), note: r.note.trim(), by: S.email, at: nowIso()}});
+        }
+        const total = sum(rows, r => num(r.amount));
+        if (await write(ops, `${rows.length} old debt${rows.length === 1 ? '' : 's'} saved · ${money(total)} GNF`)) m.close();
+      }
+    }
+  });
+}
 function customerDetail(id){
-  const st = {pay: {amount:'', method:'Cash', date: todayStr(), note:''}, confirmPay:''};
+  const st = {pay: {amount:'', method:'Cash', date: todayStr(), note:''}, confirmPay:'', confirmDebt:''};
   const m = openModal({
     state: st, live: true, wide: true,
     title: () => (S.customers[id] || {}).name || 'Customer',
@@ -1352,15 +1413,18 @@ function customerDetail(id){
       const bal = D.custBal[id] || 0;
       const inv = D.sales.filter(s => !s.void && s.customerId === id);
       const pays = D.payments.filter(p => p.customerId === id);
-      const rows = [...inv.map(s => ({date: s.date, o: String(s.at || ''), kind:'inv', s})), ...pays.map(p => ({date: p.date, o: '~' + String(p.at || ''), kind:'pay', p}))]
+      const olds = D.debts.filter(d => d.customerId === id);
+      const rows = [...olds.map(d => ({date: d.date, o: ' ' + String(d.at || ''), kind:'debt', d})), ...inv.map(s => ({date: s.date, o: String(s.at || ''), kind:'inv', s})), ...pays.map(p => ({date: p.date, o: '~' + String(p.at || ''), kind:'pay', p}))]
         .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.o.localeCompare(b.o));
       let run = 0;
       const lines = rows.map(r => {
+        if (r.kind === 'debt'){ const d = r.d; run += d.amount; const left = D.invRemain[d.id] || 0;
+          return `<tr><td>${fdateShort(r.date)}</td><td>Old debt<span class="sub">${esc(d.note || 'From before the app')}${left > 0.5 && left < d.amount - 0.5 ? ` · ${money(left)} left` : left <= 0.5 ? ' · settled' : ''}</span></td><td class="n">${money(d.amount)}</td><td class="n"></td><td class="n">${money(run)}</td><td class="n">${!S.isOwner ? '' : st.confirmDebt === d.id ? `<span class="inline"><button type="button" class="btn danger solid sm" data-act="voidDebt" data-id="${d.id}">Remove</button><button type="button" class="btn ghost sm" data-act="keepDebt">Keep</button></span>` : `<button type="button" class="btn ghost sm iconbtn" data-act="askDebt" data-id="${d.id}" aria-label="Remove old debt">${ic('x')}</button>`}</td></tr>`; }
         if (r.kind === 'inv'){ run += r.s.total - r.s.paid; return `<tr tabindex="0" class="click" data-act="openSale" data-id="${r.s.id}"><td>${fdateShort(r.date)}</td><td><span class="mono">${invNoS(r.s)}</span><span class="sub">${r.s.paid ? `${money(r.s.paid)} paid at the counter` : 'On credit'}</span></td><td class="n">${money(r.s.total - r.s.paid)}</td><td class="n"></td><td class="n">${money(run)}</td><td></td></tr>`; }
         const p = r.p; if (!p.void) run -= p.amount;
         return `<tr class="${p.void ? 'void' : ''}"><td>${fdateShort(r.date)}</td><td>Payment · ${esc(p.method || '')}<span class="sub">${esc(p.note || '')}</span></td><td class="n"></td><td class="n">${money(p.amount)}</td><td class="n">${p.void ? '' : money(run)}</td><td class="n">${p.void ? '<span class="pill bad">Removed</span>' : st.confirmPay === p.id ? `<span class="inline"><button type="button" class="btn danger solid sm" data-act="voidPay" data-id="${p.id}">Remove</button><button type="button" class="btn ghost sm" data-act="keepPay">Keep</button></span>` : `<button type="button" class="btn ghost sm iconbtn" data-act="askPay" data-id="${p.id}" aria-label="Remove payment">${ic('x')}</button>`}</td></tr>`;
       }).reverse().join('');
-      const unpaid = inv.filter(s => (D.invRemain[s.id] || 0) > 0.5);
+      const unpaid = [...olds, ...inv].filter(s => (D.invRemain[s.id] || 0) > 0.5);
       return `<p class="sub">${esc([k.phone, k.address, k.note].filter(Boolean).join(' · ') || 'No contact details')}</p>
         <section class="tiles">
           ${tile('Bought in total', sum(inv, s => s.total), `${inv.length} invoice${inv.length === 1 ? '' : 's'}`)}
@@ -1381,7 +1445,7 @@ function customerDetail(id){
           ${rows.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Entry</th><th class="n">Credit given</th><th class="n">Paid</th><th class="n">Balance</th><th></th></tr></thead><tbody>${lines}</tbody></table></div>` : '<p class="sub">No invoices or payments yet.</p>'}
         </div>`;
     },
-    foot: () => `<button type="button" class="btn ghost" data-act="edit">Edit details</button><span class="spacer"></span><button type="button" class="btn" data-act="sellTo">${ic('cart')}New sale</button><button type="button" class="btn primary" data-close>Done</button>`,
+    foot: () => `<button type="button" class="btn ghost" data-act="edit">Edit details</button>${S.isOwner ? `<button type="button" class="btn ghost" data-act="oldDebt">${ic('plus')}Old debt</button>` : ''}<span class="spacer"></span><button type="button" class="btn" data-act="sellTo">${ic('cart')}New sale</button><button type="button" class="btn primary" data-close>Done</button>`,
     acts: {
       edit: () => customerForm(id),
       sellTo: () => { UI.cart.customerId = id; saveDraft(); closeAll(); if (UI.view === 'sell') renderView(); else location.hash = '#sell'; },
@@ -1391,6 +1455,9 @@ function customerDetail(id){
         if (await write([{col:'payments', id:uid(), merge:false, data:{date: st.pay.date || todayStr(), customerId: id, amount: a, ...payData(st.pay), note: st.pay.note.trim(), by: S.email, at: nowIso()}}], `Payment of ${money(a)} GNF recorded`)){ st.pay = {amount:'', method: st.pay.method, accountId: st.pay.accountId, date: todayStr(), note:''}; m.render(); }
       },
       askPay: el => { st.confirmPay = el.dataset.id; m.render(); }, keepPay: () => { st.confirmPay = ''; m.render(); },
+      oldDebt: () => oldDebtModal(id),
+      askDebt: el => { st.confirmDebt = el.dataset.id; m.render(); }, keepDebt: () => { st.confirmDebt = ''; m.render(); },
+      voidDebt: async el => { if (await write([{col:'debts', id: el.dataset.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Old debt removed')){ st.confirmDebt = ''; m.render(); } },
       voidPay: async el => { if (await write([{col:'payments', id:el.dataset.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Payment removed')){ st.confirmPay = ''; m.render(); } }
     }
   });
@@ -1896,6 +1963,7 @@ const ACT = {
   openPurchase: el => purchaseEditor(el.dataset.id),
   purchStatus: el => { UI.purchStatus = el.dataset.v; renderView(); },
   newCustomer: () => customerForm(null, id => customerDetail(id)),
+  oldDebts: () => oldDebtsBulk(),
   openCustomer: el => customerDetail(el.dataset.id),
   newSupplier: () => supplierForm(null),
   openSupplier: el => supplierDetail(el.dataset.id),
