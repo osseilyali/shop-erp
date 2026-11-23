@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-23 · 7';
+const APP_VERSION = '2026-11-23 · 8';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -305,6 +305,7 @@ const accCur = id => (S.accounts[id] || {}).currency || 'GNF';
 const isUSD = id => accCur(id) === 'USD';
 const fmtAcc = (v, cur) => cur === 'USD' ? (v < 0 ? '−$' : '$') + nf2.format(Math.abs(Math.round((v || 0) * 100) / 100)) : money(v) + ' GNF';
 const forStaff = a => S.isOwner || a.type !== 'safe';
+function saleAccId(s){ if (s.accountId && S.accounts[s.accountId]) return s.accountId; const m = METHOD_ACC[s.method]; return m && S.accounts[m] ? m : ''; }
 function defaultAcc(){ const l = accList(a => a.currency !== 'USD' && forStaff(a)); const c = l.find(([id]) => id === 'cash'); return (c || l[0] || [''])[0]; }
 function accSelect(id, bind, cur, o = {}){
   const list = accList(a => (o.usd || a.currency !== 'USD') && (o.only ? o.only(a) : forStaff(a)));
@@ -694,11 +695,15 @@ VIEWS.sell = function(){
       <div class="form">
         <div class="field"><label for="sell-paid">Amount paid now</label><input id="sell-paid" class="inp n" inputmode="decimal" value="${esc(c.paidTouched ? c.paid : (total ? String(Math.round(total)) : ''))}" data-in="paid" data-sa>
           <span class="inline"><button type="button" class="btn ghost sm" data-act="paidFull">Paid in full</button><button type="button" class="btn ghost sm" data-act="paidCredit">All on credit</button></span></div>
-        ${payField('sell-method', 'Paid into', 'cart.accountId', 'cart.method', c)}
+        ${hasAccounts() ? '' : payField('sell-method', 'Paid into', 'cart.accountId', 'cart.method', c)}
       </div>
+      ${hasAccounts() ? (paid > 0.5 ? (() => { if (!c.accountId || !S.accounts[c.accountId] || isUSD(c.accountId) || S.accounts[c.accountId].active === false || !forStaff(S.accounts[c.accountId])) c.accountId = defaultAcc();
+        return `<div class="field"><span class="lbl">Money received in</span><div class="chips acc-chips" role="group" aria-label="Money received in">${accList(a => a.currency !== 'USD' && forStaff(a)).map(([k, a]) => `<button type="button" class="chip" data-act="saleAcc" data-v="${k}" aria-pressed="${k === c.accountId}">${esc(a.name)}</button>`).join('')}</div></div>`; })()
+        : `<p class="sub">Nothing is received now, so no account changes.</p>`) : ''}
       ${credit > 0.5 ? `<div class="banner" style="padding:9px 12px"><div><b>${money(credit)} GNF on credit</b><span class="sub">${cust ? `Added to what ${esc(cust.name)} owes.` : 'Choose a customer so the balance is tracked.'}</span></div></div>` : ''}
       ${credit < -0.5 ? `<p class="errline">Amount paid is more than the total.</p>` : ''}
       <div class="field"><label for="sell-note">Note <span class="hint">(optional)</span></label><input id="sell-note" class="inp" value="${esc(c.note)}" data-bind="cart.note" placeholder="Delivery, warranty, serial number…"></div>
+      ${hasAccounts() && paid > 0.5 && c.items.length ? `<p class="sub"><b>${money(Math.min(paid, total))} GNF</b> goes into <b>${esc(accName(c.accountId))}</b>.</p>` : ''}
       <button type="button" class="btn primary big" data-act="recordSale"${UI.busy || !c.items.length ? ' disabled' : ''}>${UI.busy ? 'Saving…' : `Record sale · ${money(total)} GNF`}</button>
     </div>
   </section>`;
@@ -720,8 +725,8 @@ VIEWS.sales = function(){
     ${tile('Paid at the counter', atSale, `${pct(total ? atSale / total : 0)} of sales`)}
     ${tile('Still unpaid', left, 'on these invoices', '#customers', left > 0.5 ? 'neg' : '')}
   </section>
-  <section class="panel">${list.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th class="hide-sm">Items</th><th class="n">Total</th><th>Status</th></tr></thead><tbody>
-    ${list.map(s => `<tr tabindex="0" class="click${s.void ? ' void' : ''}" data-act="openSale" data-id="${s.id}"><td class="mono">${invNoS(s)}</td><td>${fdateShort(s.date)}</td><td>${esc(custName(s))}</td><td class="hide-sm"><span class="sub">${esc(s.items.map(i => `${qtyFmt(i.qty)}× ${i.name}`).join(', ').slice(0, 70))}</span></td><td class="n">${money(s.total)}</td><td>${salePill(s)}</td></tr>`).join('')}
+  <section class="panel">${list.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th class="hide-sm">Items</th><th class="hide-sm">Received in</th><th class="n">Total</th><th>Status</th></tr></thead><tbody>
+    ${list.map(s => `<tr tabindex="0" class="click${s.void ? ' void' : ''}" data-act="openSale" data-id="${s.id}"><td class="mono">${invNoS(s)}</td><td>${fdateShort(s.date)}</td><td>${esc(custName(s))}</td><td class="hide-sm"><span class="sub">${esc(s.items.map(i => `${qtyFmt(i.qty)}× ${i.name}`).join(', ').slice(0, 70))}</span></td><td class="hide-sm">${s.paid ? esc(saleAccId(s) ? accName(saleAccId(s)) : (s.method || '—')) : '<span class="sub">On credit</span>'}</td><td class="n">${money(s.total)}</td><td>${salePill(s)}</td></tr>`).join('')}
   </tbody></table></div>` : emptyBox('No sales here', UI.salesMonth === 'all' ? 'Record a sale to see it here.' : `No sales in ${mlabel(UI.salesMonth)}${q ? ' match your search' : ''}.`)}</section>`;
 };
 
@@ -1732,7 +1737,10 @@ function invoiceModal(saleId){
     title: () => { const s = find(); return s ? `Invoice ${invNoS(s)}` : 'Invoice'; },
     body: () => {
       const s = find(); if (!s) return `<p class="sub">This invoice isn’t available.</p>`;
-      return `${invoiceSheet(s)}
+      const accNow = saleAccId(s), canFix = hasAccounts() && s.paid > 0 && !s.void && (S.isOwner || s.by === S.email);
+      if (st.acc === undefined) st.acc = accNow || defaultAcc();
+      return `${hasAccounts() && s.paid > 0 ? `<div class="banner info noprint" style="align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:180px"><b>${money(s.paid)} GNF received in ${esc(accNow ? accName(accNow) : 'no account')}</b><span class="sub">${s.accountId ? 'Paid at the counter' : accNow ? `Matched from the payment method “${esc(s.method || '')}”` : 'This sale doesn’t say where the money went'}</span></div>${canFix ? `<div class="inline"><label class="sr" for="inv-acc">Change account</label>${accSelect('inv-acc', 'acc', st.acc, {rr: true})}${st.acc !== accNow ? '<button type="button" class="btn primary sm" data-act="fixAcc">Save</button>' : ''}</div>` : ''}</div>` : ''}
+      ${invoiceSheet(s)}
       ${st.showText ? `<div class="field noprint"><label for="inv-text">Copy this text into WhatsApp or SMS</label><textarea id="inv-text" class="inp copytext" readonly>${esc(invoiceText(s))}</textarea></div>` : ''}`;
     },
     foot: () => { const s = find(); if (!s) return '';
@@ -1745,7 +1753,8 @@ function invoiceModal(saleId){
       print: () => { const s = find(); if (s) printInvoice(s); },
       toCustomer: () => { const s = find(); if (s && s.customerId){ m.close(); customerDetail(s.customerId); } },
       voidAsk: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
-      voidYes: async () => { const s = find(); if (!s) return; if (await write([{col:'sales', id:s.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Sale voided')){ st.confirm = false; m.render(); } }
+      voidYes: async () => { const s = find(); if (!s) return; if (await write([{col:'sales', id:s.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Sale voided')){ st.confirm = false; m.render(); } },
+      fixAcc: async () => { const s = find(); if (!s || !st.acc) return; if (await write([{col:'sales', id:s.id, data:{accountId: st.acc, method: accName(st.acc)}}], `Money now counted in ${accName(st.acc)}`)) m.render(); }
     }
   });
 }
@@ -1897,6 +1906,7 @@ const ACT = {
     if (ex) ex.qty = String(r3(num(ex.qty) + 1)); else UI.cart.items.push({productId: id, name: p.name, qty: '1', price: +p.price ? String(p.price) : ''});
     saveDraft(); renderView();
   },
+  saleAcc: el => { UI.cart.accountId = el.dataset.v; saveDraft(); renderView(); },
   cartRemove: el => { UI.cart.items.splice(+el.dataset.i, 1); saveDraft(); renderView(); },
   cartClear: () => { UI.cart = Object.assign(freshCart(), {method: UI.cart.method, accountId: UI.cart.accountId}); saveDraft(); renderView(); },
   paidFull: () => { UI.cart.paidTouched = false; UI.cart.paid = ''; saveDraft(); renderView(); },
