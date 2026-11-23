@@ -33,6 +33,8 @@ Stock, market purchases and imports (with landed cost), sales and invoices, cust
 
 Owners see **Money accounts**: the cash box, Orange Money, MTN MoMo, the bank, the home safe and US dollars, each with its balance and statement. Every sale, customer payment, expense and supplier payment says which account the money went into or came out of. Use **Transfer** to move money between accounts (buying dollars records the rate; fees count as expenses), **Owner money** for money the owner takes out or puts in (not an expense), and **Count cash** at closing (a difference is recorded and the balance set to the count). Staff choose the account when they sell but don't see this page or the home safe.
 
+Purchases: a new purchase is **Paid in full** from the chosen account by default; switch to **Part paid** (type the amount) or **Not paid yet**. Each extra cost (freight, customs, transport…) has its own **Paid from** account or **Not paid yet**. Opening an older purchase shows what is still owed and a **Record a payment** form with that amount filled in, an account and a date.
+
 ## Invoices
 
 Invoices follow the shop's paper invoice book, in French: shop name, activities line, address, phone band and email; FACTURE N° and "Conakry, le"; client name, address and phone; the N° · DÉSIGNATIONS · Qté · P. UNITAIRE · Prix Total table (brand and model under each item); TOTAL; Payé and Reste à payer; the amount in French words; Le Gérant, the NB note and Le Client. **Print** produces one A4 page (or a PDF named after the invoice). All header details and the starting invoice number are in Shop settings → Invoice details; empty fields fall back to the details from the paper book. Numbers are the seller's letter plus six digits (A-000362).
@@ -76,7 +78,7 @@ Every record is one Firestore document with `updatedAt` set by the server; delet
 | `members/{email}` | team member | name, code (invoice letter), role, active |
 | `products` | product | name, sku, category, brand, unit, price, cost, min, active |
 | `customers`, `suppliers` | person or company | name, phone, … |
-| `purchases` | purchase or import | date, supplierId, kind, currency, rate, status, lines[], extras[], payments{} |
+| `purchases` | purchase or import | date, supplierId, kind, currency, rate, status, lines[], extras[{label, amount, accountId}], payments{amount, accountId, fxAmount, rate, date} |
 | `adjustments` | stock correction | date, productId, qty (+/−), unitCost, reason |
 | `sales` | invoice | no, series, date, customerId, items[{productId, brand, sku, qty, price, cost}], discount, paid, accountId, method, void |
 | `payments` | customer payment | date, customerId, amount, accountId, method, void |

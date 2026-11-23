@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-23 · 6';
+const APP_VERSION = '2026-11-23 · 7';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -151,7 +151,8 @@ function purchaseCalc(p){
   const extras = sum(p.extras || [], x => num(x.amount));
   lines.forEach(l => { l.extra = goods > 0 ? extras * l.goods / goods : (lines.length ? extras / lines.length : 0); l.landed = l.goods + l.extra; l.unit = l.qty > 0 ? l.landed / l.qty : 0; });
   const paid = sum(Object.values(p.payments || {}).filter(x => x && !x.void), x => num(x.amount));
-  return {rate, lines, goods, extras, landed: goods + extras, paid, balance: goods - paid};
+  const unpaidExtras = sum((p.extras || []).filter(x => !x.accountId), x => num(x.amount));
+  return {rate, lines, goods, extras, landed: goods + extras, paid, balance: goods - paid, unpaidExtras};
 }
 function derive(){
   const sales = [], expenses = [], payments = [];
@@ -228,6 +229,10 @@ function derive(){
     if (!pay || pay.void) continue; const a = accOf(pay);
     mv(a, pay.date || p.date, -((acc[a] && acc[a].cur === 'USD') ? (+pay.fxAmount || 0) : (+pay.amount || 0)), 'sup', 'Supplier payment', (S.suppliers[p.supplierId] || {}).name || p.ref || '', `data-act="openPurchase" data-id="${id}"`, pay.at);
   }
+  for (const [id, p] of Object.entries(S.purchases)) (p.extras || []).forEach((x, i) => {
+    if (!x || !x.accountId || !acc[x.accountId] || acc[x.accountId].cur === 'USD' || !(+x.amount > 0)) return;
+    mv(x.accountId, x.paidDate || p.date, -(+x.amount), 'sup', x.label || 'Purchase cost', p.ref || (S.suppliers[p.supplierId] || {}).name || (p.kind === 'import' ? 'Import' : 'Purchase'), `data-act="openPurchase" data-id="${id}"`, (p.createdAt || '') + i);
+  });
   for (const [id, t] of Object.entries(S.transfers)){
     if (t.void) continue; const fee = +t.fee || 0, fcur = (acc[t.from] || {}).cur;
     mv(t.from, t.date, -((+t.amount || 0) + fee), 'tr', `Transfer to ${nm(t.to)}`, fee ? `includes ${fmtAcc(fee, fcur)} fee` : (t.note || ''), `data-act="openTransfer" data-id="${id}"`, t.at);
@@ -909,7 +914,7 @@ VIEWS.money = function(){
     <section class="panel"><div class="panel-h"><h2>${MON[+mth.slice(5) - 1]} in the GNF accounts</h2></div><div class="panel-b"><div class="totals">
       <div class="row"><span class="muted">Received from customers</span><span>${money(byKind('sale'))}</span></div>
       <div class="row"><span class="muted">Spent on expenses</span><span>${neg(-byKind('exp'))}</span></div>
-      <div class="row"><span class="muted">Paid to suppliers</span><span>${neg(-byKind('sup'))}</span></div>
+      <div class="row"><span class="muted">Paid for purchases (suppliers, freight, customs…)</span><span>${neg(-byKind('sup'))}</span></div>
       <div class="row"><span class="muted">Owner took out</span><span>${neg(ownOut)}</span></div>
       <div class="row"><span class="muted">Owner put in</span><span>${money(ownIn)}</span></div>
       <div class="row"><span class="muted">Transfers, fees and count differences</span><span>${money(byKind('tr') + byKind('count'))}</span></div>
@@ -1454,16 +1459,51 @@ function supplierDetail(id){
 function purchaseEditor(id, kind = 'market', supplierId = ''){
   const src = id ? S.purchases[id] : null; const pid = id || uid();
   const blankPay = () => ({amount:'', method:'Cash', accountId:'', rate:'', date: todayStr(), note:''});
+  const extraAcc = () => hasAccounts() ? defaultAcc() : '';
   const st = src ? {
     date: src.date || todayStr(), ref: src.ref || '', supplierId: src.supplierId || '', kind: src.kind || 'market', currency: src.currency || 'GNF', rate: src.rate && src.currency !== 'GNF' ? String(src.rate) : '', status: src.status || 'received', receivedDate: src.receivedDate || '', note: src.note || '',
     lines: (src.lines || []).map(l => ({productId: l.productId, label: prodLabel(l.productId) || 'Removed product', qty: String(l.qty ?? ''), price: String(l.price ?? '')})),
-    extras: (src.extras || []).map(x => ({label: x.label || '', amount: String(x.amount ?? '')})),
-    payments: {...(src.payments || {})}, pay: blankPay(), confirm:false
+    extras: (src.extras || []).map(x => ({label: x.label || '', amount: String(x.amount ?? ''), accountId: x.accountId || '', paidDate: x.paidDate || ''})),
+    payments: {...(src.payments || {})}, pay: {...blankPay(), amount: D.pc[id] && D.pc[id].balance > 0.5 ? String(Math.round(D.pc[id].balance)) : ''}, confirm:false
   } : {
     date: todayStr(), ref:'', supplierId, kind, currency: kind === 'import' ? 'USD' : 'GNF', rate:'', status: kind === 'import' ? 'ordered' : 'received', receivedDate:'', note:'',
-    lines: [{productId:'', label:'', qty:'', price:''}], extras: kind === 'import' ? IMPORT_EXTRAS.map(l => ({label:l, amount:''})) : [], payments:{}, pay: blankPay(), confirm:false
+    lines: [{productId:'', label:'', qty:'', price:''}], extras: kind === 'import' ? IMPORT_EXTRAS.map(l => ({label:l, amount:'', accountId: extraAcc()})) : [], payments:{}, pay: blankPay(), payMode: 'full', confirm:false
   };
   const calc = () => purchaseCalc({currency: st.currency, rate: st.rate, lines: st.lines.map(l => ({productId: l.productId, qty: l.qty, price: l.price})), extras: st.extras, payments: st.payments});
+  // New purchase: what is paid to the supplier right now, in the paying account's currency and in GNF.
+  const payNow = () => {
+    const c = calc(), usd = hasAccounts() && isUSD(st.pay.accountId), r = num(st.pay.rate);
+    if (st.payMode === 'credit') return {acc: 0, gnf: 0, usd};
+    if (st.payMode === 'part'){ const a = num(st.pay.amount); return {acc: a, gnf: usd ? Math.round(a * r) : a, usd}; }
+    if (!usd) return {acc: c.goods, gnf: c.goods, usd};
+    if (st.currency === 'USD') return {acc: Math.round(sum(st.lines, l => num(l.qty) * num(l.price)) * 100) / 100, gnf: c.goods, usd};
+    return {acc: r ? Math.round(c.goods / r * 100) / 100 : 0, gnf: c.goods, usd};
+  };
+  const payNowBlock = () => {
+    if (hasAccounts() && (!st.pay.accountId || !S.accounts[st.pay.accountId])) st.pay.accountId = defaultAcc();
+    const usd = hasAccounts() && isUSD(st.pay.accountId);
+    if (usd && !st.pay.rate && !st.pay.ratePrefilled){ st.pay.rate = st.currency === 'USD' && num(st.rate) ? String(st.rate) : (curRate() ? String(curRate()) : ''); st.pay.ratePrefilled = true; }
+    const c = calc(), pn = payNow(), left = Math.max(0, c.goods - pn.gnf);
+    return `<div class="sect-h"><h3>Payment to the supplier</h3></div>
+      <div class="seg" role="group" aria-label="Payment">${[['full', 'Paid in full'], ['part', 'Part paid'], ['credit', 'Not paid yet']].map(([v, l]) => `<button type="button" data-act="payMode" data-v="${v}" aria-pressed="${st.payMode === v}">${l}</button>`).join('')}</div>
+      ${st.payMode === 'credit' ? `<p class="sub">The whole ${money(c.goods)} GNF stays owed to the supplier. Record payments later here or on the supplier’s page.</p>` : `<div class="form">
+        ${hasAccounts() ? `<div class="field"><label for="pn-acc">Paid from</label>${accSelect('pn-acc', 'pay.accountId', st.pay.accountId, {usd: true, rr: true})}</div>` : `<div class="field"><label for="pn-m">Paid by</label><select id="pn-m" class="inp" data-bind="pay.method">${opts(METHODS, st.pay.method)}</select></div>`}
+        ${st.payMode === 'part' ? `<div class="field"><label for="pn-a">Amount paid (${usd ? 'USD' : 'GNF'})</label><input id="pn-a" class="inp n" inputmode="decimal" value="${esc(st.pay.amount)}" data-bind="pay.amount" data-rr placeholder="0"></div>`
+          : `<div class="field"><span class="lbl">Amount paid</span><div class="inp n" id="pn-full" style="display:flex;align-items:center;justify-content:flex-end;background:var(--sunken)">${esc(fmtAcc(pn.acc, usd ? 'USD' : 'GNF'))}</div></div>`}
+        ${usd ? `<div class="field"><label for="pn-r">Rate: GNF for 1 USD</label><input id="pn-r" class="inp n" inputmode="decimal" value="${esc(st.pay.rate)}" data-bind="pay.rate" data-rr placeholder="e.g. 8650"><span class="hint">${st.currency === 'USD' ? 'The import’s rate, so the balance clears exactly' : esc(rateNote())}</span></div>` : ''}
+      </div>`}
+      <div class="totals"><div class="row"><span class="muted">Still owed after this</span><span class="${left > 0.5 ? 'errline' : ''}">${money(left)} GNF</span></div></div>`;
+  };
+  // Switching the paying account between GNF and dollars converts the suggested amount instead of keeping a GNF figure as dollars.
+  const payCurGuard = c => {
+    const now = hasAccounts() && isUSD(st.pay.accountId) ? 'USD' : 'GNF';
+    if (st.pay.cur && st.pay.cur !== now){
+      const r = num(st.pay.rate) || num(st.currency === 'USD' ? st.rate : curRate());
+      st.pay.amount = now === 'GNF' ? String(Math.round(c.balance)) : (r ? String(Math.round(c.balance / r * 100) / 100) : '');
+    }
+    st.pay.cur = now; return '';
+  };
+  const extraAccSelect = (i, cur) => hasAccounts() ? `<select id="xacc-${i}" class="inp" style="width:auto;min-width:9em" data-bind="extras.${i}.accountId" aria-label="Paid from">${opt('', 'Not paid yet', !cur)}${accList(a => a.currency !== 'USD' && forStaff(a)).map(([k, a]) => opt(k, 'Paid from ' + a.name, k === cur)).join('')}</select>` : '';
   const m = openModal({
     state: st, wide: true, live: true,
     title: () => id ? `${st.kind === 'import' ? 'Import' : 'Market purchase'}${st.ref ? ' · ' + st.ref : ''}` : (st.kind === 'import' ? 'New import' : 'New market purchase'),
@@ -1499,9 +1539,9 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
           ${st.lines.some(l => l.label && !l.productId) ? `<p class="errline">Lines in red aren’t in your product list. Pick from the suggestions or use New product.</p>` : ''}
         </div>
 
-        <div class="sect"><div class="sect-h"><h3>Extra costs (GNF)</h3><span class="sub">Shared across the lines by value, to get the landed cost</span></div>
+        <div class="sect"><div class="sect-h"><h3>Extra costs (GNF)</h3><span class="sub">Shared across the lines by value, to get the landed cost${hasAccounts() ? '. Each one comes out of the account you pick' : ''}</span></div>
           <datalist id="pe-xl">${[...IMPORT_EXTRAS, ...MARKET_EXTRAS].map(l => `<option value="${esc(l)}">`).join('')}</datalist>
-          ${st.extras.map((x, i) => `<div class="inline"><input id="xl-${i}" class="inp grow" list="pe-xl" value="${esc(x.label)}" data-bind="extras.${i}.label" aria-label="Cost name"><input id="xa-${i}" class="inp n" style="width:150px" inputmode="decimal" value="${esc(x.amount)}" data-bind="extras.${i}.amount" data-rr placeholder="0" aria-label="Amount in GNF"><button type="button" class="btn ghost sm iconbtn" data-act="rmExtra" data-i="${i}" aria-label="Remove cost">${ic('x')}</button></div>`).join('')}
+          ${st.extras.map((x, i) => `<div class="inline"><input id="xl-${i}" class="inp grow" list="pe-xl" value="${esc(x.label)}" data-bind="extras.${i}.label" aria-label="Cost name"><input id="xa-${i}" class="inp n" style="width:150px" inputmode="decimal" value="${esc(x.amount)}" data-bind="extras.${i}.amount" data-rr placeholder="0" aria-label="Amount in GNF">${extraAccSelect(i, x.accountId)}<button type="button" class="btn ghost sm iconbtn" data-act="rmExtra" data-i="${i}" aria-label="Remove cost">${ic('x')}</button></div>`).join('')}
           <div class="chips"><button type="button" class="chip" data-act="addExtra" data-v="">+ Other cost</button>${defaults.map(l => `<button type="button" class="chip" data-act="addExtra" data-v="${esc(l)}">+ ${esc(l)}</button>`).join('')}</div>
         </div>
 
@@ -1510,12 +1550,13 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
             <div class="row"><span class="muted">Goods${fx ? ` (${money(sum(c.lines, l => l.qty * l.price))} ${esc(cur)})` : ''}</span><span>${money(c.goods)}</span></div>
             <div class="row"><span class="muted">Extra costs${c.goods ? ` · ${pct(c.extras / c.goods)} of goods` : ''}</span><span>${money(c.extras)}</span></div>
             <div class="row grand"><span>Landed cost</span><span>${money(c.landed)} <small class="sub">GNF</small></span></div>
+            ${hasAccounts() && c.unpaidExtras > 0.5 ? `<div class="row"><span class="muted">Extra costs not paid yet</span><span class="errline">${money(c.unpaidExtras)}</span></div>` : ''}
           </div>
-          <div class="panel panel-b stack">
-            <div class="sect-h"><h3>Paid to supplier</h3><span class="sub">${c.balance > 0.5 ? `<b>${money(c.balance)}</b> still owed` : c.goods ? 'Fully paid' : ''}</span></div>
-            ${pays.length ? `<div class="bars">${pays.map(([, p]) => `<div class="totals"><div class="row"><span>${fdateShort(p.date)} · ${esc(p.method || '')}${p.fxAmount ? ` · ${esc(fmtAcc(p.fxAmount, 'USD'))}` : ''}</span><span>${money(p.amount)}</span></div></div>`).join('')}</div>` : ''}
-            <div class="form">${supplierPayFields('pe-pay', st.pay, {currency: st.currency, rate: st.rate})}</div><div><button type="button" class="btn" data-act="addPay">Add payment</button></div>
-            ${c.goods > 0 && !pays.length ? `<button type="button" class="btn ghost sm" style="align-self:flex-start" data-act="paidFull">Mark goods as fully paid</button>` : ''}
+          <div class="panel panel-b stack">${!id ? payNowBlock() : `
+            <div class="sect-h"><h3>Payments to the supplier</h3><span class="sub">${c.balance > 0.5 ? `<b class="errline">${money(c.balance)}</b> still owed` : c.goods ? '<span class="pill good">Fully paid</span>' : ''}</span></div>
+            ${pays.length ? `<div class="bars">${pays.map(([, p]) => `<div class="totals"><div class="row"><span>${fdateShort(p.date)} · ${esc(p.method || '')}${p.fxAmount ? ` · ${esc(fmtAcc(p.fxAmount, 'USD'))}` : ''}</span><span>${money(p.amount)}</span></div></div>`).join('')}</div>` : '<p class="sub">No payment recorded yet.</p>'}
+            ${c.balance > 0.5 ? `<div class="sect-h"><h3>Record a payment</h3></div><div class="form">${payCurGuard(c)}${supplierPayFields('pe-pay', st.pay, {currency: st.currency, rate: st.rate})}<div class="field"><label for="pe-pay-d">Date paid</label><input id="pe-pay-d" class="inp" type="date" value="${esc(st.pay.date)}" data-bind="pay.date"></div></div>
+            <div class="inline"><button type="button" class="btn primary" data-act="addPay">Record payment</button><button type="button" class="btn ghost sm" data-act="paidFull">Fill in what’s left</button></div>` : ''}`}
           </div>
         </div>
         <div class="field"><label for="pe-note">Note</label><input id="pe-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="Shipping line, transit agent, arrival date…"></div>`;
@@ -1529,7 +1570,7 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
       setKind: el => {
         st.kind = el.dataset.v;
         if (!id && !st.extras.some(x => num(x.amount))){
-          st.extras = st.kind === 'import' ? IMPORT_EXTRAS.map(l => ({label:l, amount:''})) : [];
+          st.extras = st.kind === 'import' ? IMPORT_EXTRAS.map(l => ({label:l, amount:'', accountId: extraAcc()})) : [];
           if (!st.lines.some(l => l.price)) st.currency = st.kind === 'import' ? 'USD' : 'GNF';
           st.status = st.kind === 'import' ? 'ordered' : 'received';
         }
@@ -1540,15 +1581,18 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
       addLine: () => { st.lines.push({productId:'', label:'', qty:'', price:''}); m.render(); const n = document.getElementById('pl-' + (st.lines.length - 1)); if (n) n.focus(); },
       rmLine: el => { st.lines.splice(+el.dataset.i, 1); if (!st.lines.length) st.lines.push({productId:'', label:'', qty:'', price:''}); m.render(); },
       newProd: () => productModal(null, {onSaved: (newId, doc) => { const empty = st.lines.find(l => !l.productId && !l.label); const line = {productId: newId, label: prodLabel(newId, doc), qty:'', price: st.currency === 'GNF' && doc.cost ? String(doc.cost) : ''}; if (empty) Object.assign(empty, line); else st.lines.push(line); m.render(); }}),
-      addExtra: el => { st.extras.push({label: el.dataset.v || '', amount:''}); m.render(); const n = document.getElementById('xa-' + (st.extras.length - 1)); if (n) n.focus(); },
+      payMode: el => { st.payMode = el.dataset.v; if (st.payMode === 'part' && !st.pay.amount) st.pay.amount = ''; m.render(); },
+      addExtra: el => { st.extras.push({label: el.dataset.v || '', amount:'', accountId: extraAcc()}); m.render(); const n = document.getElementById('xa-' + (st.extras.length - 1)); if (n) n.focus(); },
       rmExtra: el => { st.extras.splice(+el.dataset.i, 1); m.render(); },
       paidFull: () => { const bal = calc().balance, r = num(st.pay.rate || (st.currency === 'USD' ? st.rate : '')); st.pay.amount = hasAccounts() && isUSD(st.pay.accountId) && r ? String(Math.round(bal / r * 100) / 100) : String(Math.round(bal)); m.render(); },
       addPay: async () => {
         const r = supplierPayData(st.pay); if (r.err) return toast(r.err);
-        const payId = uid(); const pay = {...r.data, date: todayStr(), note:'', by: S.email, at: nowIso()};
-        if (id){ if (!(await write([{col:'purchases', id:pid, data:{payments: {[payId]: pay}}}], 'Payment recorded'))) return; }
-        else toast('Payment added. It is saved when you record the purchase.');
-        st.payments[payId] = pay; st.pay = {...blankPay(), accountId: st.pay.accountId}; m.render();
+        if (r.data.amount > calc().balance + 0.5) return toast(`That’s more than the ${money(calc().balance)} GNF still owed.`);
+        const payId = uid(); const pay = {...r.data, date: st.pay.date || todayStr(), note:'', by: S.email, at: nowIso()};
+        if (!(await write([{col:'purchases', id:pid, data:{payments: {[payId]: pay}}}], `Payment of ${money(pay.amount)} GNF recorded`))) return;
+        st.payments[payId] = pay;
+        const left = Math.max(0, calc().balance);
+        st.pay = {...blankPay(), accountId: st.pay.accountId, amount: left > 0.5 && !isUSD(st.pay.accountId) ? String(Math.round(left)) : ''}; m.render();
       },
       askDel: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
       del: async () => { if (await write([{col:'purchases', id:pid, data:{deleted:true}}], 'Purchase deleted')) m.close(); },
@@ -1562,12 +1606,23 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
         }
         if (st.currency !== 'GNF' && !(num(st.rate) > 0)) return toast(`Enter the exchange rate: how many GNF for 1 ${st.currency}.`);
         const payments = {...((S.purchases[pid] || {}).payments || {}), ...st.payments};
+        if (!id && st.payMode !== 'credit'){
+          const c = calc(), pn = payNow();
+          if (st.payMode === 'part' && !(pn.acc > 0)) return toast('Enter the amount paid, or choose Not paid yet.');
+          if (pn.usd && !(num(st.pay.rate) > 0)) return toast('Enter the exchange rate for the dollars paid.');
+          if (pn.gnf > c.goods + 0.5) return toast(`The amount paid is more than the goods total of ${money(c.goods)} GNF.`);
+          if (pn.acc > 0){
+            const a = hasAccounts() ? (st.pay.accountId || defaultAcc()) : '';
+            payments[uid()] = {amount: Math.round(pn.gnf), ...(pn.usd ? {fxAmount: pn.acc, rate: num(st.pay.rate)} : {}), ...(a ? {accountId: a, method: accName(a)} : {method: st.pay.method}), date: st.date || todayStr(), note: 'Paid with the purchase', by: S.email, at: nowIso()};
+          }
+        }
         const doc = {date: st.date || todayStr(), ref: st.ref.trim(), supplierId: st.supplierId || null, kind: st.kind, currency: st.currency, rate: st.currency === 'GNF' ? 1 : num(st.rate),
           status: st.status, receivedDate: st.status === 'received' ? (st.kind === 'import' ? (st.receivedDate || todayStr()) : (st.date || todayStr())) : '',
           lines: lines.map(l => ({productId: l.productId, qty: num(l.qty), price: num(l.price)})),
-          extras: st.extras.filter(x => x.label.trim() || num(x.amount)).map(x => ({label: x.label.trim() || 'Other cost', amount: num(x.amount)})),
+          extras: st.extras.filter(x => x.label.trim() || num(x.amount)).map(x => ({label: x.label.trim() || 'Other cost', amount: num(x.amount), accountId: x.accountId || '', paidDate: x.accountId ? (x.paidDate || '') : ''})),
           payments, note: st.note.trim(), by: (src && src.by) || S.email, createdAt: (src && src.createdAt) || nowIso(), editedAt: nowIso()};
-        if (await write([{col:'purchases', id:pid, data:doc, merge:false}], id ? 'Purchase saved' : (st.status === 'received' ? 'Purchase recorded and added to stock' : 'Import recorded as in transit'))) m.close();
+        const paidMsg = id ? '' : st.payMode === 'credit' ? ', not paid yet' : purchaseCalc(doc).balance > 0.5 ? ', part paid' : ', paid in full';
+        if (await write([{col:'purchases', id:pid, data:doc, merge:false}], id ? 'Purchase saved' : (st.status === 'received' ? 'Purchase recorded and added to stock' : 'Import recorded as in transit') + paidMsg)) m.close();
       }
     }
   });
