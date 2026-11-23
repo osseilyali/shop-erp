@@ -37,7 +37,7 @@ Purchases: a new purchase is **Paid in full** from the chosen account by default
 
 ## Invoices
 
-Invoices follow the shop's paper invoice book, in French: shop name, activities line, address, phone band and email; FACTURE N° and "Conakry, le"; client name, address and phone; the N° · DÉSIGNATIONS · Qté · P. UNITAIRE · Prix Total table (brand and model under each item); TOTAL; Payé and Reste à payer; the amount in French words; Le Gérant, the NB note and Le Client. **Print** produces one A4 page (or a PDF named after the invoice). All header details and the starting invoice number are in Shop settings → Invoice details; empty fields fall back to the details from the paper book. Numbers are the seller's letter plus six digits (A-000362).
+The default design is **simple, black only** (thin lines, no colored areas) to save ink. Shop settings → Invoice details → **Invoice design** can switch to the blue design that copies the paper book. Invoices follow the shop's paper invoice book, in French: shop name, activities line, address, phone band and email; FACTURE N° and "Conakry, le"; client name, address and phone; the N° · DÉSIGNATIONS · Qté · P. UNITAIRE · Prix Total table (brand and model under each item); TOTAL; Payé and Reste à payer; the amount in French words; Le Gérant, the NB note and Le Client. **Print** produces one A4 page (or a PDF named after the invoice). All header details and the starting invoice number are in Shop settings → Invoice details; empty fields fall back to the details from the paper book. Numbers are the seller's letter plus six digits (A-000362).
 
 ## Dollar rate
 

@@ -380,6 +380,43 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
 .ifr-meta{font-size:.8em;color:var(--im);text-align:center}
 .ifr-void{position:absolute;top:40%;left:50%;transform:translate(-50%,-50%) rotate(-14deg);border:3px solid var(--ir);color:var(--ir);font-family:Archivo,sans-serif;font-weight:800;font-size:3em;letter-spacing:.12em;padding:.05em .5em;border-radius:.2em;opacity:.75;pointer-events:none}
 @media (max-width:600px){.ifr{font-size:11.5px;padding:1.2em .9em}.ifr-ft{grid-template-columns:1fr 1fr}.ifr-nb{grid-column:1/-1;order:-1}.ifr-t{min-width:0}.ifr-t th{white-space:normal;font-size:1em;padding:.45em .4em}.ifr-t td{padding:.45em .4em}.ifr-t .c-no{width:1.8em}.ifr-t .c-q{width:2.6em}.ifr-t .c-pu,.ifr-t .c-pt{width:auto}}
+/* ---------- simple invoice: black text and thin lines, to save ink ---------- */
+.ivs{--ivk:#111;--ivm:#555;--ivl:#9a9a9a;position:relative;background:#fff;color:var(--ivk);font-family:Inter,system-ui,sans-serif;font-size:13px;line-height:1.4;display:flex;flex-direction:column;gap:1.3em;padding:1.8em 1.6em;border:1px solid var(--line);border-radius:var(--r);font-variant-numeric:tabular-nums;overflow:hidden}
+.ivs-top{display:flex;justify-content:space-between;gap:1em 1.5em;align-items:flex-start;flex-wrap:wrap}
+.ivs-shop{min-width:0}
+.ivs-shop div{color:var(--ivm);font-size:.92em;overflow-wrap:anywhere}
+.ivs-shop .ivs-name{font-size:1.75em;font-weight:700;letter-spacing:.06em;color:var(--ivk);line-height:1.15}
+.ivs-shop .ivs-tag{color:var(--ivk);font-size:.98em;margin:.15em 0 .35em}
+.ivs-doc{text-align:right;margin-left:auto}
+.ivs-title{font-size:1.75em;font-weight:300;letter-spacing:.18em;line-height:1.15}
+.ivs-no{font-size:1.12em;font-weight:600;margin-top:.15em}
+.ivs-d{color:var(--ivm);font-size:.92em;margin-top:.1em}
+.ivs-hr{border:0;border-top:.5pt solid var(--ivl);margin:0}
+.ivs-client{display:flex;justify-content:space-between;gap:.4em 1.4em;flex-wrap:wrap}
+.ivs-client span,.ivs-words span{color:var(--ivm)}
+.ivs-tw{overflow-x:auto}
+.ivs-t{width:100%;border-collapse:collapse}
+.ivs-t th{font-size:.85em;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--ivm);text-align:left;padding:0 .5em .45em;border-bottom:.5pt solid var(--ivl);white-space:nowrap}
+.ivs-t td{padding:.55em .5em;vertical-align:top;color:var(--ivk)}
+.ivs-t tbody tr+tr td{border-top:.25pt solid #d4d4d4}
+.ivs-t td small{display:block;color:var(--ivm);font-size:.86em}
+.ivs-t .n{text-align:right;white-space:nowrap}
+.ivs-t .c{text-align:center}
+.ivs-t .c-no{width:2em;color:var(--ivm)}
+.ivs-sum{margin-left:auto;width:min(100%,23em);display:flex;flex-direction:column;gap:.35em;border-top:.5pt solid var(--ivl);padding-top:.65em}
+.ivs-sum div{display:flex;justify-content:space-between;gap:1em}
+.ivs-sum span{color:var(--ivm)}
+.ivs-sum .v,.ivs-sum b{color:var(--ivk);white-space:nowrap}
+.ivs-due{font-size:1.2em;font-weight:700}
+.ivs-due span{color:var(--ivk)!important;white-space:nowrap}
+.ivs-words{font-size:.95em}
+.ivs-sig{margin-top:auto;display:flex;justify-content:space-between;gap:2em;padding-top:2.5em}
+.ivs-sig div{width:15em;max-width:45%;text-align:center;color:var(--ivm);font-size:.92em}
+.ivs-sig div::before{content:"";display:block;border-top:.5pt solid var(--ivl);margin-bottom:.4em}
+.ivs-nb{text-align:center;font-size:.86em;color:var(--ivm)}
+.ivs-meta{text-align:center;font-size:.76em;color:#888}
+.ivs-void{position:absolute;top:40%;left:50%;transform:translate(-50%,-50%) rotate(-14deg);border:2px solid #111;color:#111;font-weight:700;font-size:2.6em;letter-spacing:.12em;padding:.05em .5em;opacity:.5;pointer-events:none}
+@media (max-width:600px){.ivs{font-size:12px;padding:1.3em 1em}.ivs-doc{text-align:left;margin-left:0}.ivs-t th,.ivs-t td{padding-left:.3em;padding-right:.3em}}
 #print-area{display:none}
 @media print{
   @page{size:A4;margin:0}
@@ -392,6 +429,9 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
   #print-area .ifr-tw{overflow:visible}
   #print-area .ifr-ft{grid-template-columns:1fr 1.6fr 1fr}
   #print-area .ifr-nb{grid-column:auto;order:0}
+  #print-area .ivs{width:210mm;min-height:296mm;padding:16mm 16mm 12mm;border:0;border-radius:0;font-size:10pt;gap:6mm}
+  #print-area .ivs-tw{overflow:visible}
+  #print-area .ivs-doc{text-align:right;margin-left:auto}
 }
 </style>
 </head>

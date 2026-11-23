@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-23 · 8';
+const APP_VERSION = '2026-11-23 · 9';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -1144,7 +1144,7 @@ VIEWS.team = function(){
 };
 
 VIEWS.shop = function(){
-  if (!UI.shop) UI.shop = {...shopInfo(), invoiceStart: S.settings.invoiceStart != null ? String(S.settings.invoiceStart) : ''};
+  if (!UI.shop) UI.shop = {...shopInfo(), invoiceStart: S.settings.invoiceStart != null ? String(S.settings.invoiceStart) : '', invoiceStyle: S.settings.invoiceStyle || 'simple'};
   const f = UI.shop;
   const counts = `${Object.keys(S.products).length} products · ${D.sales.length} invoices · ${Object.keys(S.purchases).length} purchases · ${Object.keys(S.customers).length} customers`;
   const startN = parseInt(f.invoiceStart, 10) || 1, nextShown = invNo(Math.max((D.maxNoBy[mySeries()] || 0) + 1, startN), mySeries());
@@ -1157,6 +1157,7 @@ VIEWS.shop = function(){
     <div class="field"><label for="sh-mail">Email</label><input id="sh-mail" class="inp" type="email" value="${esc(f.email)}" data-bind="shop.email"></div>
     <div class="field"><label for="sh-city">City</label><input id="sh-city" class="inp" value="${esc(f.city)}" data-bind="shop.city"><span class="hint">“${esc(f.city || 'Conakry')}, le ${frDate(todayStr())}”</span></div>
     <div class="field"><label for="sh-start">Number invoices from</label><input id="sh-start" class="inp n" inputmode="numeric" value="${esc(f.invoiceStart)}" data-bind="shop.invoiceStart" data-rr placeholder="1"><span class="hint">Your next invoice: ${esc(nextShown)}. Use this to continue after the paper book.</span></div>
+    <div class="field"><label for="sh-style">Invoice design</label><select id="sh-style" class="inp" data-bind="shop.invoiceStyle">${opt('simple', 'Simple, black only (saves ink)', f.invoiceStyle !== 'paper')}${opt('paper', 'Blue, like the paper book', f.invoiceStyle === 'paper')}</select></div>
     <div class="field full"><label for="sh-foot">Note at the bottom</label><input id="sh-foot" class="inp" value="${esc(f.footer)}" data-bind="shop.footer"><span class="hint">Printed after “NB :”</span></div>
   </div><div><button type="button" class="btn primary" data-act="saveShop">Save invoice details</button></div></div></section>
   <div class="grid2">
@@ -1676,7 +1677,8 @@ function invoiceSheet(s){
   const sh = shopInfo(), k = s.customerId ? S.customers[s.customerId] : null;
   const rem = Math.max(0, D.invRemain[s.id] || 0), paid = s.total - rem;
   const client = [custName(s), k && k.address].filter(Boolean).join(' — ');
-  return `<div class="ifr">
+  if ((S.settings.invoiceStyle || 'simple') !== 'paper') return invoiceSimple(s, sh, k, rem, paid);
+  return `<div class="inv-doc ifr">
     <div class="ifr-hd">
       <div class="ifr-name">${esc(sh.shopName)}</div>
       ${sh.tagline ? `<div class="ifr-tag">${esc(sh.tagline)}</div>` : ''}
@@ -1702,6 +1704,32 @@ function invoiceSheet(s){
     <div class="ifr-ft"><div class="ifr-sig"><span></span>Le Gérant</div><div class="ifr-nb">${sh.footer ? `<i>NB :</i> ${esc(sh.footer)}` : ''}</div><div class="ifr-sig"><span></span>Le Client</div></div>
     <div class="ifr-meta">Servi par ${esc(staffName(s.by).replace(' (you)', ''))}</div>
     ${s.void ? '<div class="ifr-void">ANNULÉE</div>' : ''}
+  </div>`;
+}
+// Default invoice: black text and thin lines only, to save ink.
+function invoiceSimple(s, sh, k, rem, paid){
+  return `<div class="inv-doc ivs">
+    <div class="ivs-top">
+      <div class="ivs-shop"><div class="ivs-name">${esc(sh.shopName)}</div>${sh.tagline ? `<div class="ivs-tag">${esc(sh.tagline)}</div>` : ''}${sh.address ? `<div>${esc(sh.address)}</div>` : ''}${sh.phone ? `<div>Tél : ${esc(sh.phone)}</div>` : ''}${sh.email ? `<div>${esc(sh.email)}</div>` : ''}</div>
+      <div class="ivs-doc"><div class="ivs-title">FACTURE</div><div class="ivs-no">N° ${esc(invNoS(s))}</div><div class="ivs-d">${esc(sh.city)}, le ${frDate(s.date)}</div></div>
+    </div>
+    <hr class="ivs-hr">
+    <div class="ivs-client"><div><span>Client :</span> <b>${esc(custName(s))}</b>${k && k.address ? ' — ' + esc(k.address) : ''}</div>${k && k.phone ? `<div><span>Tél :</span> ${esc(k.phone)}</div>` : ''}</div>
+    <div class="ivs-tw"><table class="ivs-t"><thead><tr><th class="c-no">N°</th><th>Désignation</th><th class="c">Qté</th><th class="n">P. unitaire</th><th class="n">Prix total</th></tr></thead><tbody>
+      ${s.items.map((i, x) => { const d = itemDetail(i); return `<tr><td class="c-no">${x + 1}</td><td>${esc(i.name)}${d ? `<small>${esc(d)}</small>` : ''}</td><td class="c">${frQty(i.qty)}</td><td class="n">${frNum(i.price)}</td><td class="n">${frNum(i.qty * i.price)}</td></tr>`; }).join('')}
+    </tbody></table></div>
+    <div class="ivs-sum">
+      ${s.discount ? `<div><span>Sous-total</span><span class="v">${frNum(s.subtotal)} GNF</span></div><div><span>Remise</span><span class="v">− ${frNum(s.discount)} GNF</span></div>` : ''}
+      <div><span>Total</span><b>${frNum(s.total)} GNF</b></div>
+      <div><span>Payé${paid > 0 ? ` (${esc(payLabelFr(s))})` : ''}</span><span class="v">${frNum(paid)} GNF</span></div>
+      <div class="ivs-due"><span>Reste à payer</span><span>${frNum(rem)} GNF</span></div>
+    </div>
+    <div class="ivs-words"><span>Arrêtée la présente facture à la somme de :</span> <i>${esc(montantEnLettres(s.total))} (${frNum(s.total)} GNF).</i></div>
+    ${s.note ? `<div class="ivs-words"><span>Note :</span> ${esc(s.note)}</div>` : ''}
+    <div class="ivs-sig"><div>Le Gérant</div><div>Le Client</div></div>
+    ${sh.footer ? `<div class="ivs-nb">NB : ${esc(sh.footer)}</div>` : ''}
+    <div class="ivs-meta">Servi par ${esc(staffName(s.by).replace(' (you)', ''))}</div>
+    ${s.void ? '<div class="ivs-void">ANNULÉE</div>' : ''}
   </div>`;
 }
 function printInvoice(s){
@@ -1943,7 +1971,7 @@ const ACT = {
   saveShop: async () => {
     const f = UI.shop;
     if (String(f.invoiceStart || '').trim() && !/^\d{1,9}$/.test(String(f.invoiceStart).trim())) return toast('“Number invoices from” must be a whole number, like 362.');
-    const doc = {shopName: (f.shopName || '').trim(), tagline: (f.tagline || '').trim(), address: (f.address || '').trim(), phone: (f.phone || '').trim(), email: (f.email || '').trim(), city: (f.city || '').trim(), footer: (f.footer || '').trim(), invoiceStart: parseInt(f.invoiceStart, 10) || null};
+    const doc = {shopName: (f.shopName || '').trim(), tagline: (f.tagline || '').trim(), address: (f.address || '').trim(), phone: (f.phone || '').trim(), email: (f.email || '').trim(), city: (f.city || '').trim(), footer: (f.footer || '').trim(), invoiceStart: parseInt(f.invoiceStart, 10) || null, invoiceStyle: f.invoiceStyle === 'paper' ? 'paper' : 'simple'};
     if (await write([{col:'config', id:'settings', data:doc}], 'Invoice details saved')) UI.shop = null;
   },
   backupJson: () => {
