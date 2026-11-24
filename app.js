@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-24 · 11';
+const APP_VERSION = '2026-11-24 · 12';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates','debts','supdebts'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -288,7 +288,7 @@ const invNoS = s => invNo(s.no, s.series);
 const nextNo = () => Math.max((D.maxNoBy[mySeries()] || 0) + 1, parseInt(S.settings.invoiceStart, 10) || 1);
 const custName = s => s.customerId ? ((S.customers[s.customerId] || {}).name || 'Removed customer') : (s.walkin || 'Walk-in customer');
 const prodName = id => (S.products[id] || {}).name || 'Removed product';
-const prodLabel = (id, p) => { p = p || S.products[id]; return p ? (p.sku ? `${p.name} · ${p.sku}` : p.name) : ''; };
+const prodLabel = (id, p) => { p = p || S.products[id]; return p ? [p.name, p.brand, p.sku].filter(Boolean).join(' · ') : ''; };
 function staffName(e){
   if (!e) return 'Unknown';
   if (e === 'imported') return 'Claude version';
@@ -1696,9 +1696,9 @@ function purchaseEditor(id, kind = 'market', supplierId = ''){
 
         <div class="sect"><div class="sect-h"><h3>Products</h3><span class="inline"><button type="button" class="btn sm" data-act="addLine">${ic('plus')}Add line</button><button type="button" class="btn sm" data-act="newProd">${ic('plus')}New product</button></span></div>
           <datalist id="pe-prods">${sortedBy(S.products).filter(([, p]) => p.active !== false).map(([k]) => `<option value="${esc(prodLabel(k))}">`).join('')}</datalist>
-          <div class="scroll"><table class="tbl"><thead><tr><th style="min-width:200px">Product</th><th class="n">Qty</th><th class="n">Unit price ${esc(cur)}</th><th class="n">Goods GNF</th><th class="n">+ Extra costs</th><th class="n">Landed per unit</th><th class="n">Sale price · margin</th><th></th></tr></thead><tbody>
+          <div class="scroll"><table class="tbl"><thead><tr><th style="min-width:240px">Product · brand · model</th><th class="n">Qty</th><th class="n">Unit price ${esc(cur)}</th><th class="n">Goods GNF</th><th class="n">+ Extra costs</th><th class="n">Landed per unit</th><th class="n">Sale price · margin</th><th></th></tr></thead><tbody>
           ${st.lines.map((l, i) => { const cl = c.lines[i]; const p = S.products[l.productId]; const mg = p && +p.price > 0 && cl.unit > 0 ? (p.price - cl.unit) / p.price : null;
-            return `<tr><td><input id="pl-${i}" class="inp${l.label && !l.productId ? ' bad' : ''}" list="pe-prods" value="${esc(l.label)}" data-in="lineProd" data-i="${i}" placeholder="Type to pick a product" autocomplete="off" aria-label="Product"></td>
+            return `<tr><td><input id="pl-${i}" class="inp${l.label && !l.productId ? ' bad' : ''}" list="pe-prods" value="${esc(l.label)}" data-in="lineProd" data-i="${i}" placeholder="Type a product, brand or model" autocomplete="off" aria-label="Product">${p ? `<span class="sub pl-detail">${esc(p.brand ? 'Brand: ' + p.brand : 'No brand')}${p.sku ? ' · Model: ' + esc(p.sku) : ''} · ${qtyU((D.prod[l.productId] || {}).stock || 0, p.unit)} in stock</span>` : ''}</td>
               <td><input id="pq-${i}" class="inp n" style="width:76px" inputmode="decimal" value="${esc(l.qty)}" data-bind="lines.${i}.qty" data-rr aria-label="Quantity"></td>
               <td><input id="pp-${i}" class="inp n" style="width:110px" inputmode="decimal" value="${esc(l.price)}" data-bind="lines.${i}.price" data-rr aria-label="Unit price"></td>
               <td class="n">${money(cl.goods)}</td><td class="n">${money(cl.extra)}</td><td class="n"><b>${cl.unit ? money(cl.unit) : '—'}</b></td>
