@@ -442,6 +442,9 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
   #print-area .ivs{width:210mm;min-height:296mm;padding:16mm 16mm 12mm;border:0;border-radius:0;font-size:10pt;gap:6mm}
   #print-area .ivs-tw{overflow:visible}
   #print-area .ivs-doc{text-align:right;margin-left:auto}
+  /* Long invoices run onto a second page: repeat the page padding on every page and never cut a line or the totals in half. */
+  #print-area .ivs,#print-area .ifr{-webkit-box-decoration-break:clone;box-decoration-break:clone}
+  #print-area tr,#print-area .ivs-sum,#print-area .ivs-sig,#print-area .ivs-words{break-inside:avoid}
 }
 </style>
 </head>
