@@ -17,8 +17,8 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-23 · 10';
-const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates','debts'];
+const APP_VERSION = '2026-11-24 · 11';
+const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates','debts','supdebts'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
 const METHOD_ACC = {'Cash':'cash', 'Orange Money':'orange', 'MTN MoMo':'mtn', 'Bank transfer':'bank', 'Cheque':'bank'};
@@ -112,7 +112,7 @@ const LIVE = {};
 const S = {
   auth:'loading', user:null, email:'', isOwner:false, fs:null, authObj:null,
   cacheLoaded:false, slow:false, online:navigator.onLine, unsynced:false, listenErr:'', installEvt:null, updateReady:false,
-  settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}, accounts:{}, transfers:{}, equity:{}, cashcounts:{}, rates:{}, debts:{}
+  settings:{}, members:{}, products:{}, customers:{}, suppliers:{}, purchases:{}, adjustments:{}, sales:{}, payments:{}, expenses:{}, accounts:{}, transfers:{}, equity:{}, cashcounts:{}, rates:{}, debts:{}, supdebts:{}
 };
 const freshCart = () => ({items:[], customerId:'', walkin:'', discount:'', paid:'', paidTouched:false, method:'Cash', accountId:'', date:todayStr(), note:'', q:''});
 const UI = {
@@ -218,6 +218,9 @@ function derive(){
   }
   const supBal = {};
   for (const [id, p] of Object.entries(S.purchases)){ if (!p.supplierId) continue; supBal[p.supplierId] = (supBal[p.supplierId] || 0) + pc[id].balance; }
+  // old supplier debts from before the app; paid like purchases
+  const supDebts = Object.entries(S.supdebts).filter(([, d]) => d && !d.void && d.supplierId && +d.amount > 0).map(([id, d]) => { const paid = sum(Object.values(d.payments || {}).filter(x => x && !x.void), x => num(x.amount)); return {...d, id, amount: +d.amount, paid, balance: +d.amount - paid, date: d.date || ''}; });
+  for (const d of supDebts) supBal[d.supplierId] = (supBal[d.supplierId] || 0) + d.balance;
   // money accounts: opening balance + every movement dated on or after the account's start date
   const acc = {}, extraCosts = [];
   for (const [id, a] of Object.entries(S.accounts)) acc[id] = {bal: +a.opening || 0, from: a.openingDate || '', cur: a.currency || 'GNF', rows: [], lastCount: null};
@@ -230,6 +233,10 @@ function derive(){
   for (const [id, p] of Object.entries(S.purchases)) for (const pay of Object.values(p.payments || {})){
     if (!pay || pay.void) continue; const a = accOf(pay);
     mv(a, pay.date || p.date, -((acc[a] && acc[a].cur === 'USD') ? (+pay.fxAmount || 0) : (+pay.amount || 0)), 'sup', 'Supplier payment', (S.suppliers[p.supplierId] || {}).name || p.ref || '', `data-act="openPurchase" data-id="${id}"`, pay.at);
+  }
+  for (const d of supDebts) for (const pay of Object.values(d.payments || {})){
+    if (!pay || pay.void) continue; const a = accOf(pay);
+    mv(a, pay.date || d.date, -((acc[a] && acc[a].cur === 'USD') ? (+pay.fxAmount || 0) : (+pay.amount || 0)), 'sup', 'Old debt payment', (S.suppliers[d.supplierId] || {}).name || '', `data-act="openSupplier" data-id="${d.supplierId}"`, pay.at);
   }
   for (const [id, p] of Object.entries(S.purchases)) (p.extras || []).forEach((x, i) => {
     if (!x || !x.accountId || !acc[x.accountId] || acc[x.accountId].cur === 'USD' || !(+x.amount > 0)) return;
@@ -254,7 +261,7 @@ function derive(){
   }
   // dollar rate: set by hand, one entry per day; the newest day wins
   const rateHist = Object.entries(S.rates).map(([id, r]) => ({id, date: r.date || id, rate: +r.rate || 0, by: r.by, at: r.at})).filter(r => r.rate > 0).sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : String(b.at || '').localeCompare(String(a.at || '')));
-  D = {debts, sales, expenses, payments, prod, pc, maxNoBy, stockValue, transitValue, transitCount, custBal, supBal, invRemain, acc, extraCosts, rateHist, rate: rateHist[0] || null};
+  D = {debts, supDebts, sales, expenses, payments, prod, pc, maxNoBy, stockValue, transitValue, transitCount, custBal, supBal, invRemain, acc, extraCosts, rateHist, rate: rateHist[0] || null};
 }
 derive();
 
@@ -802,7 +809,7 @@ VIEWS.suppliers = function(){
   let rows = Object.entries(S.suppliers).filter(([, k]) => !q || `${k.name} ${k.phone || ''} ${k.location || ''}`.toLowerCase().includes(q));
   rows.sort((a, b) => ((D.supBal[b[0]] || 0) - (D.supBal[a[0]] || 0)) || String(a[1].name).localeCompare(String(b[1].name)));
   const owed = sum(Object.values(D.supBal), b => Math.max(0, b));
-  return header('Goods', 'Suppliers', `<button type="button" class="btn primary" data-act="newSupplier">${ic('plus')}Add supplier</button>`) +
+  return header('Goods', 'Suppliers', `${S.isOwner ? `<button type="button" class="btn" data-act="supOldDebts">Enter old debts</button>` : ''}<button type="button" class="btn primary" data-act="newSupplier">${ic('plus')}Add supplier</button>`) +
   `<div class="toolbar"><div class="search">${ic('search')}<input id="sup-q" class="inp" type="search" placeholder="Name, phone or location" value="${esc(UI.supQ)}" data-bind="supQ" data-rr aria-label="Search suppliers"></div><span class="sub">${owed > 0.5 ? `You owe suppliers <b>${money(owed)} GNF</b>` : 'All suppliers are paid.'}</span></div>
   <section class="panel">${rows.length ? `<div class="list">${rows.map(([id, k]) => { const b = D.supBal[id] || 0; return `<button type="button" class="li" data-act="openSupplier" data-id="${id}"><span class="nm"><b>${esc(k.name)}</b><span class="sub">${k.kind === 'import' ? 'Import' : k.kind === 'both' ? 'Market & import' : 'Market'}${k.location ? ' · ' + esc(k.location) : ''} · ${count[id] || 0} purchase${(count[id] || 0) === 1 ? '' : 's'}</span></span><span class="amt">${b > 0.5 ? `<span class="pill bad">You owe ${money(b)}</span>` : '<span class="pill good">Paid up</span>'}</span></button>`; }).join('')}</div>`
     : emptyBox(Object.keys(S.suppliers).length ? 'No match' : 'No suppliers yet', Object.keys(S.suppliers).length ? 'No supplier matches your search.' : 'Add the wholesalers you buy from at the market and your import suppliers abroad.', Object.keys(S.suppliers).length ? '' : `<button type="button" class="btn primary sm" data-act="newSupplier">${ic('plus')}Add supplier</button>`)}</section>`;
@@ -1489,40 +1496,129 @@ function supplierForm(id, onSaved){
     }
   });
 }
+const findSup = name => { const t = String(name || '').trim().toLowerCase(); if (!t) return ''; const e = Object.entries(S.suppliers).find(([, k]) => String(k.name || '').trim().toLowerCase() === t); return e ? e[0] : ''; };
+const SUP_DEBT_HELP = 'What you still owed this supplier before you started using the app. It’s added to what you owe them, but isn’t a purchase, adds nothing to stock and doesn’t change any money account. Pay it from the supplier’s page like a purchase.';
+function supDebtDoc(supplierId, cur, amount, rate, date, note){
+  const a = num(amount), r = num(rate), usd = cur === 'USD';
+  return {supplierId, amount: usd ? Math.round(a * r) : a, currency: usd ? 'USD' : 'GNF', ...(usd ? {fxAmount: a, rate: r} : {}), date: date || todayStr(), note: String(note || '').trim(), payments: {}, by: S.email, at: nowIso()};
+}
+function supOldDebtModal(supplierId){
+  const st = {cur: 'GNF', amount: '', rate: '', date: todayStr(), note: ''};
+  const m = openModal({state: st, live: true, title: () => `Old debt · ${(S.suppliers[supplierId] || {}).name || ''}`,
+    body: () => { if (st.cur === 'USD' && !st.rate && curRate()) st.rate = String(curRate());
+      return `<p class="sub">${SUP_DEBT_HELP}</p><div class="form">
+      <div class="field"><span class="lbl">Currency</span><div class="seg" role="group">${['GNF', 'USD'].map(c => `<button type="button" data-act="cur" data-v="${c}" aria-pressed="${st.cur === c}">${c}</button>`).join('')}</div></div>
+      <div class="field"><label for="sdm-a">Amount owed (${st.cur})</label><input id="sdm-a" class="inp n" inputmode="decimal" value="${esc(st.amount)}" data-bind="amount" data-rr placeholder="0"></div>
+      ${st.cur === 'USD' ? `<div class="field"><label for="sdm-r">Rate: GNF for 1 USD</label><input id="sdm-r" class="inp n" inputmode="decimal" value="${esc(st.rate)}" data-bind="rate" data-rr placeholder="e.g. 8650"><span class="hint">${num(st.amount) && num(st.rate) ? `= ${money(num(st.amount) * num(st.rate))} GNF owed` : esc(rateNote())}</span></div>` : ''}
+      <div class="field"><label for="sdm-d">Owed as of</label><input id="sdm-d" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
+      <div class="field full"><label for="sdm-n">Note</label><input id="sdm-n" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="e.g. Container of March, balance on invoice 4471"></div></div>`; },
+    foot: () => '<button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Save old debt</button>',
+    acts: {
+      cur: el => { st.cur = el.dataset.v; m.render(); },
+      save: async () => {
+        if (!(num(st.amount) > 0)) return toast('Enter the amount owed.');
+        if (st.cur === 'USD' && !(num(st.rate) > 0)) return toast('Enter the exchange rate.');
+        const doc = supDebtDoc(supplierId, st.cur, st.amount, st.rate, st.date, st.note);
+        if (await write([{col:'supdebts', id: uid(), merge:false, data: doc}], `Old debt of ${money(doc.amount)} GNF saved`)) m.close();
+      }
+    }
+  });
+}
+function supOldDebtsBulk(){
+  const blank = () => ({name: '', phone: '', cur: 'GNF', amount: '', rate: '', note: ''});
+  const st = {date: todayStr(), rows: [blank(), blank(), blank(), blank(), blank()]};
+  const m = openModal({state: st, wide: true, live: true, title: () => 'Old debts to suppliers',
+    body: () => {
+      st.rows.forEach(r => { if (r.cur === 'USD' && !r.rate && curRate()) r.rate = String(curRate()); });
+      const gnf = r => r.cur === 'USD' ? num(r.amount) * num(r.rate) : num(r.amount);
+      const filled = st.rows.filter(r => r.name.trim() && num(r.amount) > 0);
+      return `<p class="sub">${SUP_DEBT_HELP} Type a name: if it matches a supplier already in the app, the debt goes to them; otherwise a new supplier is created.</p>
+      <div class="field" style="max-width:240px"><label for="sd-date">Owed as of</label><input id="sd-date" class="inp" type="date" value="${esc(st.date)}" data-bind="date"></div>
+      <datalist id="sd-sups">${sortedBy(S.suppliers).map(([, k]) => `<option value="${esc(k.name)}">`).join('')}</datalist>
+      <div class="scroll"><table class="tbl"><thead><tr><th>Supplier</th><th>Phone</th><th>Currency</th><th class="n">Amount owed</th><th class="n">Rate</th><th>Note</th><th></th></tr></thead><tbody>
+      ${st.rows.map((r, i) => { const ex = findSup(r.name); return `<tr>
+        <td style="min-width:180px"><input id="sd-n-${i}" class="inp" list="sd-sups" value="${esc(r.name)}" data-bind="rows.${i}.name" data-rr autocomplete="off" aria-label="Supplier name">${r.name.trim() ? `<span class="sub">${ex ? 'Already in the app' + ((D.supBal[ex] || 0) > 0.5 ? ` · you owe ${money(D.supBal[ex])}` : '') : 'New supplier'}</span>` : ''}</td>
+        <td style="min-width:130px"><input id="sd-p-${i}" class="inp" value="${esc(ex ? (S.suppliers[ex].phone || '') : r.phone)}" data-bind="rows.${i}.phone"${ex ? ' disabled' : ''} placeholder="Phone / WhatsApp" aria-label="Phone"></td>
+        <td><select id="sd-c-${i}" class="inp" style="width:auto" data-bind="rows.${i}.cur" data-rr aria-label="Currency">${opts(['GNF', 'USD'], r.cur)}</select></td>
+        <td style="min-width:130px"><input id="sd-a-${i}" class="inp n" inputmode="decimal" value="${esc(r.amount)}" data-bind="rows.${i}.amount" data-rr placeholder="0" aria-label="Amount owed">${r.cur === 'USD' && num(r.amount) && num(r.rate) ? `<span class="sub">= ${money(gnf(r))} GNF</span>` : ''}</td>
+        <td style="min-width:100px">${r.cur === 'USD' ? `<input id="sd-r-${i}" class="inp n" inputmode="decimal" value="${esc(r.rate)}" data-bind="rows.${i}.rate" data-rr placeholder="8650" aria-label="Rate">` : '<span class="sub">—</span>'}</td>
+        <td style="min-width:150px"><input id="sd-x-${i}" class="inp" value="${esc(r.note)}" data-bind="rows.${i}.note" placeholder="e.g. Invoice 4471" aria-label="Note"></td>
+        <td><button type="button" class="btn ghost sm iconbtn" data-act="rm" data-i="${i}" aria-label="Remove row">${ic('x')}</button></td></tr>`; }).join('')}
+      </tbody></table></div>
+      <div class="inline" style="justify-content:space-between"><button type="button" class="btn sm" data-act="add">${ic('plus')}Add 5 rows</button><span class="sub">Total <b>${money(sum(filled, gnf))} GNF</b> owed to ${filled.length} supplier${filled.length === 1 ? '' : 's'}</span></div>`;
+    },
+    foot: () => '<button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" data-act="save">Save old debts</button>',
+    acts: {
+      add: () => { for (let i = 0; i < 5; i++) st.rows.push(blank()); m.render(); },
+      rm: el => { st.rows.splice(+el.dataset.i, 1); if (!st.rows.length) st.rows.push(blank()); m.render(); },
+      save: async () => {
+        const rows = st.rows.filter(r => r.name.trim() || String(r.amount).trim());
+        if (!rows.length) return toast('Enter at least one supplier and the amount you owe.');
+        for (const r of rows){
+          if (!r.name.trim()) return toast('A row has an amount but no supplier name.');
+          if (!(num(r.amount) > 0)) return toast(`Enter the amount you owe ${r.name.trim()}.`);
+          if (r.cur === 'USD' && !(num(r.rate) > 0)) return toast(`Enter the exchange rate for ${r.name.trim()}.`);
+        }
+        const ops = [], made = {};
+        let total = 0;
+        for (const r of rows){
+          const key = r.name.trim().toLowerCase();
+          let sid = findSup(r.name) || made[key];
+          if (!sid){ sid = uid(); made[key] = sid; ops.push({col:'suppliers', id: sid, merge:false, data:{name: r.name.trim(), phone: r.phone.trim(), kind: r.cur === 'USD' ? 'import' : 'market', location: '', note: '', editedAt: nowIso()}}); }
+          const doc = supDebtDoc(sid, r.cur, r.amount, r.rate, st.date, r.note); total += doc.amount;
+          ops.push({col:'supdebts', id: uid(), merge:false, data: doc});
+        }
+        if (await write(ops, `${rows.length} old debt${rows.length === 1 ? '' : 's'} saved · ${money(total)} GNF`)) m.close();
+      }
+    }
+  });
+}
 function supplierDetail(id){
-  const st = {pay: {purchaseId:'', amount:'', method:'Cash', accountId:'', rate:'', date: todayStr(), note:''}};
+  const st = {pay: {target:'', amount:'', method:'Cash', accountId:'', rate:'', date: todayStr(), note:''}, confirmDebt:''};
   const m = openModal({
     state: st, live: true, wide: true,
     title: () => (S.suppliers[id] || {}).name || 'Supplier',
     body: () => {
       const k = S.suppliers[id]; if (!k) return '<p>This supplier was deleted.</p>';
       const ps = Object.entries(S.purchases).filter(([, p]) => p.supplierId === id).sort((a, b) => String(b[1].date).localeCompare(String(a[1].date)));
-      const open = ps.filter(([pid]) => D.pc[pid].balance > 0.5);
-      if (!open.some(([pid]) => pid === st.pay.purchaseId)) st.pay.purchaseId = open.length ? open[open.length - 1][0] : '';
+      const olds = D.supDebts.filter(d => d.supplierId === id).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      const openP = ps.filter(([pid]) => D.pc[pid].balance > 0.5);
+      // what can be paid: old debts first (oldest), then unpaid purchases, oldest first
+      const targets = [...olds.filter(d => d.balance > 0.5).map(d => ({v: 'debt:' + d.id, label: `Old debt${d.note ? ' · ' + d.note : ''} · owes ${money(d.balance)}`, ref: {currency: d.currency, rate: d.rate}})),
+        ...openP.slice().reverse().map(([pid, p]) => ({v: pid, label: `${p.ref || fdate(p.date)} · owes ${money(D.pc[pid].balance)}`, ref: p}))];
+      if (!targets.some(t => t.v === st.pay.target)) st.pay.target = targets.length ? targets[0].v : '';
+      const tgt = targets.find(t => t.v === st.pay.target);
       const bal = D.supBal[id] || 0;
       return `<p class="sub">${esc([k.kind === 'import' ? 'Import supplier' : k.kind === 'both' ? 'Market & import' : 'Market supplier', k.phone, k.location, k.note].filter(Boolean).join(' · '))}</p>
         <section class="tiles">
           ${tile('Bought in total', sum(ps, ([pid]) => D.pc[pid].goods), `${ps.length} purchase${ps.length === 1 ? '' : 's'}, goods only`)}
-          ${tile('Paid', sum(ps, ([pid]) => D.pc[pid].paid), 'to this supplier')}
-          ${tile('You owe', Math.max(0, bal), `${open.length} unpaid purchase${open.length === 1 ? '' : 's'}`, '', bal > 0.5 ? 'neg' : 'pos')}
-          ${tile('Extra costs', sum(ps, ([pid]) => D.pc[pid].extras), 'freight, customs, transport')}
+          ${tile('Paid', sum(ps, ([pid]) => D.pc[pid].paid) + sum(olds, d => d.paid), 'to this supplier')}
+          ${tile('You owe', Math.max(0, bal), `${targets.length} unpaid item${targets.length === 1 ? '' : 's'}`, '', bal > 0.5 ? 'neg' : 'pos')}
+          ${olds.length ? tile('Old debts', sum(olds, d => d.amount), 'from before the app') : tile('Extra costs', sum(ps, ([pid]) => D.pc[pid].extras), 'freight, customs, transport')}
         </section>
-        ${open.length ? `<div class="sect"><h3>Pay this supplier</h3><div class="form">
-          <div class="field"><label for="sp-p">For purchase</label><select id="sp-p" class="inp" data-bind="pay.purchaseId" data-rr>${open.map(([pid, p]) => opt(pid, `${p.ref || fdate(p.date)} · owes ${money(D.pc[pid].balance)}`, pid === st.pay.purchaseId)).join('')}</select></div>
-          ${supplierPayFields('sp', st.pay, S.purchases[st.pay.purchaseId])}
+        ${targets.length ? `<div class="sect"><h3>Pay this supplier</h3><div class="form">
+          <div class="field"><label for="sp-p">For</label><select id="sp-p" class="inp" data-bind="pay.target" data-rr>${targets.map(t => opt(t.v, t.label, t.v === st.pay.target)).join('')}</select></div>
+          ${supplierPayFields('sp', st.pay, tgt && tgt.ref)}
           <div class="field"><label for="sp-d">Date</label><input id="sp-d" class="inp" type="date" value="${esc(st.pay.date)}" data-bind="pay.date"></div>
         </div><div><button type="button" class="btn primary" data-act="pay">Record payment</button></div></div>` : ''}
+        ${olds.length ? `<div class="sect"><h3>Old debts</h3><div class="scroll"><table class="tbl"><thead><tr><th>Owed as of</th><th>Note</th><th class="n">Amount GNF</th><th class="n">Still owed</th><th></th></tr></thead><tbody>${olds.map(d => `<tr><td>${fdateShort(d.date)}</td><td>${esc(d.note || 'From before the app')}${d.currency === 'USD' ? `<span class="sub">${esc(fmtAcc(+d.fxAmount || 0, 'USD'))} at ${money(d.rate)}</span>` : ''}</td><td class="n">${money(d.amount)}</td><td class="n">${d.balance > 0.5 ? money(d.balance) : '<span class="pill good">Paid</span>'}</td><td class="n">${S.isOwner && !d.paid ? (st.confirmDebt === d.id ? `<span class="inline"><button type="button" class="btn danger solid sm" data-act="voidDebt" data-id="${d.id}">Remove</button><button type="button" class="btn ghost sm" data-act="keepDebt">Keep</button></span>` : `<button type="button" class="btn ghost sm iconbtn" data-act="askDebt" data-id="${d.id}" aria-label="Remove old debt">${ic('x')}</button>`) : ''}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
         <div class="sect"><h3>Purchases</h3>${ps.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Reference</th><th>Status</th><th class="n">Goods GNF</th><th class="n">Still owed</th></tr></thead><tbody>${ps.map(([pid, p]) => `<tr tabindex="0" class="click" data-act="openPurchase" data-id="${pid}"><td>${fdateShort(p.date)}</td><td>${esc(p.ref || (p.kind === 'import' ? 'Import' : 'Market purchase'))}</td><td>${p.status === 'received' ? '<span class="pill good">Received</span>' : '<span class="pill warn">In transit</span>'}</td><td class="n">${money(D.pc[pid].goods)}</td><td class="n">${D.pc[pid].balance > 0.5 ? money(D.pc[pid].balance) : '<span class="pill good">Paid</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="sub">No purchases from this supplier yet.</p>'}</div>`;
     },
-    foot: () => `<button type="button" class="btn ghost" data-act="edit">Edit details</button><span class="spacer"></span><button type="button" class="btn" data-act="buy">${ic('plus')}New purchase</button><button type="button" class="btn primary" data-close>Done</button>`,
+    foot: () => `<button type="button" class="btn ghost" data-act="edit">Edit details</button>${S.isOwner ? `<button type="button" class="btn ghost" data-act="oldDebt">${ic('plus')}Old debt</button>` : ''}<span class="spacer"></span><button type="button" class="btn" data-act="buy">${ic('plus')}New purchase</button><button type="button" class="btn primary" data-close>Done</button>`,
     acts: {
       edit: () => supplierForm(id),
       buy: () => purchaseEditor(null, (S.suppliers[id] || {}).kind === 'import' ? 'import' : 'market', id),
+      oldDebt: () => supOldDebtModal(id),
+      askDebt: el => { st.confirmDebt = el.dataset.id; m.render(); }, keepDebt: () => { st.confirmDebt = ''; m.render(); },
+      voidDebt: async el => { if (await write([{col:'supdebts', id: el.dataset.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Old debt removed')){ st.confirmDebt = ''; m.render(); } },
       pay: async () => {
-        const pid = st.pay.purchaseId;
-        if (!pid) return toast('Pick the purchase you are paying for.');
+        const t = st.pay.target;
+        if (!t) return toast('Pick what you are paying for.');
         const r = supplierPayData(st.pay); if (r.err) return toast(r.err);
-        if (await write([{col:'purchases', id:pid, data:{payments: {[uid()]: {...r.data, date: st.pay.date || todayStr(), note: st.pay.note.trim(), by: S.email, at: nowIso()}}}}], `Payment of ${money(r.data.amount)} GNF recorded`)){ st.pay = {purchaseId:'', amount:'', method: st.pay.method, accountId: st.pay.accountId, rate:'', date: todayStr(), note:''}; m.render(); }
+        const isDebt = t.startsWith('debt:'), owed = isDebt ? ((D.supDebts.find(d => 'debt:' + d.id === t) || {}).balance || 0) : (D.pc[t] ? D.pc[t].balance : 0);
+        if (r.data.amount > owed + 0.5) return toast(`That’s more than the ${money(owed)} GNF still owed.`);
+        const pay = {...r.data, date: st.pay.date || todayStr(), note: st.pay.note.trim(), by: S.email, at: nowIso()};
+        if (await write([{col: isDebt ? 'supdebts' : 'purchases', id: isDebt ? t.slice(5) : t, data:{payments: {[uid()]: pay}}}], `Payment of ${money(pay.amount)} GNF recorded`)){ st.pay = {target:'', amount:'', method: st.pay.method, accountId: st.pay.accountId, rate:'', date: todayStr(), note:''}; m.render(); }
       }
     }
   });
@@ -1966,6 +2062,7 @@ const ACT = {
   oldDebts: () => oldDebtsBulk(),
   openCustomer: el => customerDetail(el.dataset.id),
   newSupplier: () => supplierForm(null),
+  supOldDebts: () => supOldDebtsBulk(),
   openSupplier: el => supplierDetail(el.dataset.id),
   openSale: el => invoiceModal(el.dataset.id),
   editMember: el => memberModal(el.dataset.id),

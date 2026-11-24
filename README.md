@@ -33,6 +33,8 @@ Stock, market purchases and imports (with landed cost), sales and invoices, cust
 
 Customers & credit → **Enter old debts** (owners): one row per customer with the amount still owed, an optional note (e.g. the paper invoice number) and the date it was owed as of. A name that matches an existing customer adds the debt to them; otherwise a new customer is created. Old debts add to what the customer owes, are not sales, are not counted in profit and don't change any money account. Payments settle the oldest debt first. A single old debt can also be added from a customer's page.
 
+The same exists for **suppliers**: Suppliers → **Enter old debts** (owners), with a currency per row (GNF, or USD with its rate). Old supplier debts add to what you owe, are not purchases, add nothing to stock and don't change any account. They're paid from the supplier's page ("Pay this supplier" lists old debts first, then unpaid purchases), from any account including dollars at the debt's own rate.
+
 ## Money accounts
 
 Owners see **Money accounts**: the cash box, Orange Money, MTN MoMo, the bank, the home safe and US dollars, each with its balance and statement. Every sale, customer payment, expense and supplier payment says which account the money went into or came out of. Use **Transfer** to move money between accounts (buying dollars records the rate; fees count as expenses), **Owner money** for money the owner takes out or puts in (not an expense), and **Count cash** at closing (a difference is recorded and the balance set to the count). Staff choose the account when they sell but don't see this page or the home safe.
@@ -93,5 +95,6 @@ Every record is one Firestore document with `updatedAt` set by the server; delet
 | `cashcounts` | end-of-day count | date, accountId, expected, counted, diff |
 | `rates/{YYYY-MM-DD}` | day's dollar rate | date, rate (GNF for 1 USD), by |
 | `debts` | customer debt from before the app | customerId, amount, date, note, void |
+| `supdebts` | debt to a supplier from before the app | supplierId, amount (GNF), currency, fxAmount, rate, date, note, payments{}, void |
 
 Stock, average landed cost, customer and supplier balances, account balances and profit are calculated in the app from these records. An account's balance is its opening amount plus every movement dated on or after its start date; records made before accounts existed are matched to an account by their payment method. Transfer fees and cash-count differences are counted as expenses; owner money in or out is not. Double-entry accounting can later be generated from the same records (each sale, purchase, payment and expense becomes a journal entry).
