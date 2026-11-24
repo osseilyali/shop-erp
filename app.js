@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-24 · 13';
+const APP_VERSION = '2026-11-24 · 14';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates','debts','supdebts'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -1871,6 +1871,8 @@ function invoiceSheet(s){
 }
 // Default invoice: black text and thin lines only, to save ink.
 function invoiceSimple(s, sh, k, rem, paid){
+  // Faint monogram in the free space: full size for short sales, smaller for medium ones, none when the items need the room.
+  const wm = s.items.length <= 4 && !s.note && !s.discount ? 'lg' : s.items.length <= 7 ? 'sm' : '';
   return `<div class="inv-doc ivs">
     <div class="ivs-top">
       <div class="ivs-shop"><div class="ivs-name">${esc(sh.shopName)}</div>${sh.tagline ? `<div class="ivs-tag">${esc(sh.tagline)}</div>` : ''}${sh.address ? `<div>${esc(sh.address)}</div>` : ''}${sh.phone ? `<div>Tél : ${esc(sh.phone)}</div>` : ''}${sh.email ? `<div>${esc(sh.email)}</div>` : ''}</div>
@@ -1889,6 +1891,7 @@ function invoiceSimple(s, sh, k, rem, paid){
     </div>
     <div class="ivs-words"><span>Arrêtée la présente facture à la somme de :</span> <i>${esc(montantEnLettres(s.total))} (${frNum(s.total)} GNF).</i></div>
     ${s.note ? `<div class="ivs-words"><span>Note :</span> ${esc(s.note)}</div>` : ''}
+    ${wm ? `<div class="ivs-wm ${wm}" aria-hidden="true"><div class="ivs-wm-ring"></div><div class="ivs-wm-mono">${esc(initials())}</div><div class="ivs-wm-thanks">Merci de votre confiance</div>${sh.tagline ? `<div class="ivs-wm-cats">${esc(sh.tagline)}</div>` : ''}</div>` : ''}
     <div class="ivs-sig"><div>Le Gérant</div><div>Le Client</div></div>
     ${sh.footer ? `<div class="ivs-nb">NB : ${esc(sh.footer)}</div>` : ''}
     <div class="ivs-meta">Servi par ${esc(staffName(s.by).replace(' (you)', ''))}</div>

@@ -410,6 +410,16 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
 .ivs-due{font-size:1.2em;font-weight:700}
 .ivs-due span{color:var(--ivk)!important;white-space:nowrap}
 .ivs-words{font-size:.95em}
+.ivs-wm{position:relative;flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.9em;min-height:26em;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.ivs-wm-ring{position:absolute;left:50%;top:50%;width:25em;height:25em;transform:translate(-50%,-50%);border-radius:50%;border:.5pt solid #dde6f2}
+.ivs-wm-mono{position:relative;font-family:Archivo,"Arial Narrow",sans-serif;font-weight:800;font-stretch:72%;font-size:12em;line-height:.8;color:transparent;-webkit-text-stroke:.8pt #c3d3ea;letter-spacing:-.02em}
+.ivs-wm-thanks{position:relative;font-family:Archivo,"Arial Narrow",sans-serif;font-stretch:85%;font-style:italic;font-weight:600;font-size:1.4em;color:#2763AE}
+.ivs-wm-cats{position:relative;font-size:.84em;color:#666;letter-spacing:.12em;text-transform:uppercase;text-align:center;max-width:24em}
+.ivs-wm.sm{min-height:17em;gap:.6em}
+.ivs-wm.sm .ivs-wm-ring{width:16em;height:16em}
+.ivs-wm.sm .ivs-wm-mono{font-size:7em}
+.ivs-wm.sm .ivs-wm-thanks{font-size:1.15em}
+.ivs-wm.sm .ivs-wm-cats{display:none}
 .ivs-sig{margin-top:auto;display:flex;justify-content:space-between;gap:2em;padding-top:2.5em}
 .ivs-sig div{width:15em;max-width:45%;text-align:center;color:var(--ivm);font-size:.92em}
 .ivs-sig div::before{content:"";display:block;border-top:.5pt solid var(--ivl);margin-bottom:.4em}
