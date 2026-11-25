@@ -45,6 +45,12 @@ Purchases: a new purchase is **Paid in full** from the chosen account by default
 
 The default design is **simple, black only** (thin lines, no colored areas) to save ink. Shop settings → Invoice details → **Invoice design** can switch to the blue design that copies the paper book. Invoices follow the shop's paper invoice book, in French: shop name, activities line, address, phone band and email; FACTURE N° and "Conakry, le"; client name, address and phone; the N° · DÉSIGNATIONS · Qté · P. UNITAIRE · Prix Total table (brand and model under each item); TOTAL; Payé and Reste à payer; the amount in French words; Le Gérant, the NB note and Le Client. **Print** produces one A4 page (or a PDF named after the invoice). All header details and the starting invoice number are in Shop settings → Invoice details; empty fields fall back to the details from the paper book. Numbers are the seller's letter plus six digits (A-000362).
 
+## Special orders and documents
+
+For goods bought at the market for one client and sold straight away, make a product such as "Plomberie – divers" and tick **Special order**. It keeps no stock. On the sale you type the client's price, what you paid and which account paid; that account goes down on the sale date and the sale's cost is exact, so profit is right for every order. The printed invoice shows only the client's price.
+
+Any sale can carry photos and PDFs (market receipt, client's list): attach them in the cart or later from the invoice. Photos are shrunk to about 1600 px; PDFs can be up to 4 MB. Firebase Storage needs a paid plan, so files are stored in Firestore itself, cut into parts under the 1 MB document limit, and downloaded only when someone opens them.
+
 ## Dollar rate
 
 The rate is entered by hand, once a day, by an owner. Until today's rate is saved, owners see a reminder at the top of every screen. The current rate shows in the menu (and as `$ 8,700` in the phone's top bar); tapping it opens the rate history. New imports in USD, buying dollars and dollar payments to suppliers start from the current rate and can still be changed on each record. Past records keep the rate they were saved with. A rate more than 20% away from the last one asks to be confirmed.
@@ -82,11 +88,12 @@ Every record is one Firestore document with `updatedAt` set by the server; delet
 |---|---|---|
 | `config/settings` | — | shopName, address, phone, prefix, footer |
 | `members/{email}` | team member | name, code (invoice letter), role, active |
-| `products` | product | name, sku, category, brand, unit, price, cost, min, active |
+| `products` | product | name, sku, category, brand, unit, price, cost, min, special (special order: no stock), active |
 | `customers`, `suppliers` | person or company | name, phone, … |
 | `purchases` | purchase or import | date, supplierId, kind, currency, rate, status, lines[], extras[{label, amount, accountId}], payments{amount, accountId, fxAmount, rate, date} |
 | `adjustments` | stock correction | date, productId, qty (+/−), unitCost, reason |
-| `sales` | invoice | no, series, date, customerId, items[{productId, brand, sku, qty, price, cost}], discount, paid, accountId, method, void |
+| `sales` | invoice | no, series, date, customerId, items[{productId, brand, sku, qty, price, cost, special, costAcc}], discount, paid, accountId, method, files{fileId: {name, type, size, parts, at, by, removed}}, void |
+| `files/{fileId}-{n}` | part of an attached document (not synced; read when opened) | saleId, i, n, data (base64, ≤700,000 characters) |
 | `payments` | customer payment | date, customerId, amount, accountId, method, void |
 | `expenses` | expense | date, category, amount, accountId, method, void |
 | `accounts` | place money is kept | name, type (cash, safe, mobile, bank), currency (GNF or USD), opening, openingDate, active |

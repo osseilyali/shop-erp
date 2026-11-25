@@ -9,7 +9,7 @@ const ownerLetter = e => 'ABC'[OWNERS.indexOf(e)] || 'A';
 /* ================= constants ================= */
 const METHODS = ['Cash','Orange Money','MTN MoMo','Bank transfer','Cheque','Other'];
 const EXP_CATS = ['Rent','Salaries','Transport & fuel','Electricity & generator','Phone & internet','Taxes & fees','Repairs & maintenance','Meals','Other'];
-const UNITS = ['piece','box','carton','set','pair','meter','roll','bar','kg','liter'];
+const UNITS = ['piece','box','carton','set','pair','meter','roll','bar','kg','liter','lot'];
 const CURRENCIES = ['GNF','USD','EUR','CNY','AED'];
 const IMPORT_EXTRAS = ['Sea freight','Customs duties','Transit agent','Port & handling','Transport to shop'];
 const MARKET_EXTRAS = ['Transport','Loading & porters'];
@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-24 · 15';
+const APP_VERSION = '2026-11-25 · 16';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates','debts','supdebts'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -55,7 +55,10 @@ const ICONS = {
   upload:'<path d="M12 21V9M7 14l5-5 5 5M4 3h16"/>',
   printer:'<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>',
   adjust:'<path d="M12 3v18M3 12h18"/><path d="M8 7l4-4 4 4M8 17l4 4 4-4"/>',
-  logout:'<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 16l-4-4 4-4M6 12h10"/>'
+  logout:'<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 16l-4-4 4-4M6 12h10"/>',
+  clip:'<path d="M20.5 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/>',
+  image:'<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/>',
+  file:'<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M9 13h6M9 17h6"/>'
 };
 const ic = n => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]||''}</svg>`;
 
@@ -117,7 +120,7 @@ const S = {
 const freshCart = () => ({items:[], customerId:'', walkin:'', discount:'', paid:'', paidTouched:false, method:'Cash', accountId:'', date:todayStr(), note:'', q:''});
 const UI = {
   view:'home', busy:false,
-  cart: freshCart(),
+  cart: freshCart(), cartFiles: [], attaching: 0,
   stockQ:'', stockCat:'', stockLow:false, stockHidden:false,
   salesQ:'', salesMonth: todayStr().slice(0,7),
   purchQ:'', purchStatus:'',
@@ -158,7 +161,7 @@ function derive(){
   const sales = [], expenses = [], payments = [];
   for (const [id, s] of Object.entries(S.sales)){
     if (!s || !Array.isArray(s.items) || !s.date) continue;
-    const items = s.items.map(i => ({productId:i.productId, name:i.name, brand:i.brand, sku:i.sku, qty:+i.qty || 0, price:+i.price || 0, cost:+i.cost || 0}));
+    const items = s.items.map(i => ({productId:i.productId, name:i.name, brand:i.brand, sku:i.sku, qty:+i.qty || 0, price:+i.price || 0, cost:+i.cost || 0, special: !!i.special, costAcc: i.costAcc || ''}));
     const subtotal = sum(items, i => i.qty * i.price), discount = +s.discount || 0, total = subtotal - discount;
     const paid = +s.paid || 0;
     sales.push({...s, id, series: (s.series || 'A'), items, subtotal, discount, total, cogs: sum(items, i => i.qty * i.cost), paid, balance: total - paid, void: !!s.void});
@@ -192,13 +195,13 @@ function derive(){
   for (const s of sales){
     maxNoBy[s.series] = Math.max(maxNoBy[s.series] || 0, +s.no || 0);
     if (s.void) continue;
-    for (const i of s.items){ if (!i.productId) continue; const x = P(i.productId); x.stock -= i.qty; x.sold += i.qty; x.moves++; }
+    for (const i of s.items){ if (!i.productId) continue; const x = P(i.productId); if (!i.special) x.stock -= i.qty; x.sold += i.qty; x.moves++; }
   }
   let stockValue = 0;
   for (const [id, x] of Object.entries(prod)){
     x.stock = r3(x.stock);
     x.avg = x.costQty > 0 ? x.costSum / x.costQty : (+(S.products[id] && S.products[id].cost) || 0);
-    if (x.stock > 0 && S.products[id]) stockValue += x.stock * x.avg;
+    if (x.stock > 0 && S.products[id] && !S.products[id].special) stockValue += x.stock * x.avg;
   }
   let transitValue = 0, transitCount = 0;
   for (const [id, p] of Object.entries(S.purchases)) if (p.status !== 'received'){ transitValue += pc[id].landed; transitCount++; }
@@ -228,6 +231,8 @@ function derive(){
   const mv = (id, date, amt, kind, what, sub, act, at) => { const x = acc[id]; if (!x || !amt || !date || (x.from && date < x.from)) return; x.bal += amt; x.rows.push({date, amt, kind, what, sub, act, at: at || ''}); };
   const nm = id => (S.accounts[id] || {}).name || '?';
   for (const s of sales) if (!s.void && s.paid) mv(accOf(s), s.date, s.paid, 'sale', `Sale ${invNoS(s)}`, custName(s), `data-act="openSale" data-id="${s.id}"`, s.at);
+  for (const s of sales) if (!s.void) for (const i of s.items) if (i.special && i.costAcc && acc[i.costAcc] && acc[i.costAcc].cur !== 'USD' && i.qty * i.cost > 0)
+    mv(i.costAcc, s.date, -(i.qty * i.cost), 'sup', 'Special order bought', `${i.name} · ${invNoS(s)}`, `data-act="openSale" data-id="${s.id}"`, s.at);
   for (const p of payments) if (!p.void) mv(accOf(p), p.date, p.amount, 'sale', 'Customer payment', (S.customers[p.customerId] || {}).name || '', p.customerId ? `data-act="openCustomer" data-id="${p.customerId}"` : '', p.at);
   for (const e of expenses) if (!e.void) mv(accOf(e), e.date, -e.amount, 'exp', e.category, e.note || '', '', e.at);
   for (const [id, p] of Object.entries(S.purchases)) for (const pay of Object.values(p.payments || {})){
@@ -352,7 +357,7 @@ function supplierPayData(pay){
 }
 const qtyU = (q, unit) => `${qtyFmt(q)} ${esc(unit && unit !== 'piece' ? unit : 'pcs')}`;
 function allCats(){ const s = new Set(DEFAULT_CATS); Object.values(S.products).forEach(p => { if (p.category) s.add(p.category); }); return [...s]; }
-function isLow(id){ const p = S.products[id], x = D.prod[id]; if (!p || !x || p.active === false) return false; const min = +p.min || 0; return min > 0 ? x.stock <= min : (x.moves > 0 && x.stock <= 0); }
+function isLow(id){ const p = S.products[id], x = D.prod[id]; if (!p || !x || p.active === false || p.special) return false; const min = +p.min || 0; return min > 0 ? x.stock <= min : (x.moves > 0 && x.stock <= 0); }
 const sortedBy = (obj, key = 'name') => Object.entries(obj).sort((a, b) => String(a[1][key] || '').localeCompare(String(b[1][key] || '')));
 const loading = () => !S.cacheLoaded;
 function emptyBox(title, text, action = ''){
@@ -394,6 +399,120 @@ async function write(ops, okMsg){
   if (okMsg) toast(S.online ? okMsg : `${okMsg}. Saved on this device; it uploads when the internet is back.`);
   return true;
 }
+/* ================= attached documents =================
+   Photos and PDFs attached to a sale. Firebase Storage needs a paid plan, so each file is kept in
+   Firestore itself: photos are shrunk on the phone first, then the file is cut into parts under the
+   1 MB document limit ('files' collection, ids `${fileId}-${n}`). The sale lists its files in a map
+   (sale.files[fileId] = {name, type, size, parts, at, by}). Files are fetched only when opened, so
+   they never slow down syncing or use phone data until someone looks at them. */
+const FILE_PART = 700000;              // base64 characters per Firestore document
+const FILE_MAX_PDF = 4 * 1024 * 1024;  // 4 MB: 8 parts, one upload of about 5.6 MB
+const FILE_CACHE = new Map();          // fileId -> Blob, for files made or opened on this device
+const fileSize = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+const liveFiles = rec => Object.entries((rec && rec.files) || {}).filter(([, f]) => f && !f.removed).sort((a, b) => String(a[1].at || '').localeCompare(String(b[1].at || '')));
+const blobToB64 = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+function b64ToBlob(b64, type){ const bin = atob(b64), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return new Blob([a], {type}); }
+async function loadImage(file){
+  if (window.createImageBitmap){ try { return await createImageBitmap(file, {imageOrientation: 'from-image'}); } catch {} }
+  return await new Promise((res, rej) => { const u = URL.createObjectURL(file), im = new Image(); im.onload = () => { URL.revokeObjectURL(u); res(im); }; im.onerror = () => { URL.revokeObjectURL(u); rej(new Error('image')); }; im.src = u; });
+}
+// Turn a picked file into {name, type, size, blob}: photos become a JPEG of at most 1600 px.
+async function prepFile(file){
+  const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : '');
+  if (type.startsWith('image/')){
+    let img; try { img = await loadImage(file); } catch { throw new Error(`“${file.name}” couldn’t be read as a photo.`); }
+    const w0 = img.width, h0 = img.height, k = Math.min(1, 1600 / Math.max(w0, h0));
+    const cv = document.createElement('canvas'); cv.width = Math.round(w0 * k); cv.height = Math.round(h0 * k);
+    const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height); cx.drawImage(img, 0, 0, cv.width, cv.height);
+    const blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', 0.72));
+    if (!blob) throw new Error(`“${file.name}” couldn’t be prepared.`);
+    return {name: file.name.replace(/\.[^.]+$/, '') + '.jpg', type: 'image/jpeg', size: blob.size, blob};
+  }
+  if (type === 'application/pdf'){
+    if (file.size > FILE_MAX_PDF) throw new Error(`“${file.name}” is ${fileSize(file.size)}. PDFs can be up to 4 MB; take a photo of the pages instead.`);
+    return {name: file.name, type, size: file.size, blob: file};
+  }
+  throw new Error(`“${file.name}” isn’t a photo or a PDF.`);
+}
+// Save prepared files under a sale. Works offline: the parts upload when the internet is back.
+async function attachFiles(saleId, files){
+  if (!S.fs || !files.length) return false;
+  const add = {};
+  try {
+    for (const f of files){
+      const fid = uid(), b64 = await blobToB64(f.blob), n = Math.max(1, Math.ceil(b64.length / FILE_PART)), at = nowIso();
+      const b = F.writeBatch(S.fs);
+      for (let i = 0; i < n; i++) b.set(F.doc(S.fs, 'files', `${fid}-${i}`), {saleId, i, n, data: b64.slice(i * FILE_PART, (i + 1) * FILE_PART), by: S.email, at, updatedAt: F.serverTimestamp()});
+      b.commit().catch(e => toast(`“${f.name}”: ${errText(e)}`));
+      FILE_CACHE.set(fid, f.blob);
+      add[fid] = {name: f.name, type: f.type, size: f.size, parts: n, at, by: S.email};
+    }
+  } catch (e){ console.error(e); toast('Couldn’t read one of the files. Try again.'); return false; }
+  const k = Object.keys(add).length;
+  const ok = await write([{col:'sales', id: saleId, data: {files: add}}]);
+  // A read from the device's copy queues behind the writes, so once it answers the files are safely stored on this device.
+  try { await F.getDocFromCache(F.doc(S.fs, 'sales', saleId)); } catch {}
+  if (ok) toast(`${k === 1 ? 'Document saved' : `${k} documents saved`}${S.online ? '' : '. It uploads when the internet is back'}.`);
+  return ok;
+}
+async function fetchFile(fid, meta){
+  if (FILE_CACHE.has(fid)) return FILE_CACHE.get(fid);
+  const snaps = await Promise.all(Array.from({length: meta.parts || 1}, (_, i) => F.getDoc(F.doc(S.fs, 'files', `${fid}-${i}`))));
+  if (snaps.some(d => !d.exists() || !d.data().data)) throw new Error('missing');
+  const blob = b64ToBlob(snaps.map(d => d.data().data).join(''), meta.type || 'application/octet-stream');
+  FILE_CACHE.set(fid, blob); return blob;
+}
+function removeFile(saleId, fid, meta){
+  const b = F.writeBatch(S.fs);
+  for (let i = 0; i < (meta.parts || 1); i++) b.set(F.doc(S.fs, 'files', `${fid}-${i}`), {data: '', removed: true, updatedAt: F.serverTimestamp()}, {merge: true});
+  b.commit().catch(() => {});
+  FILE_CACHE.delete(fid);
+  return write([{col:'sales', id: saleId, data: {files: {[fid]: {removed: true, removedAt: nowIso(), removedBy: S.email}}}}], 'Document removed');
+}
+const canRemoveFile = f => S.isOwner || f.by === S.email;
+function fileChips(files, act){
+  return files.map(([fid, f]) => `<button type="button" class="doc" data-act="${act}" data-fid="${fid}" title="${esc(f.name)}">${ic(f.type === 'application/pdf' ? 'file' : 'image')}<span class="doc-n">${esc(f.name)}</span><span class="doc-s">${fileSize(f.size || 0)}</span></button>`).join('');
+}
+// Picker shown in the cart (files wait in memory until the sale is recorded) and on an invoice.
+const fileInput = (id, target) => `<label class="btn sm" for="${id}">${ic('clip')}Attach photo or PDF</label><input id="${id}" type="file" accept="image/*,application/pdf" multiple hidden data-file="${target}">`;
+function fileViewer(saleId, fid){
+  const st = {url: '', err: '', confirm: false};
+  const meta = () => (((S.sales[saleId] || {}).files) || {})[fid];
+  const m = openModal({
+    state: st, mid: true, live: true,
+    title: () => (meta() || {}).name || 'Document',
+    body: () => { const f = meta(); if (!f || f.removed) return '<p class="sub">This document was removed.</p>';
+      if (st.err) return `<p class="errline">${esc(st.err)}</p>`;
+      if (!st.url) return '<p class="sub">Opening…</p>';
+      return `${f.type.startsWith('image/') ? `<img class="doc-img" src="${st.url}" alt="${esc(f.name)}">` : `<div class="empty"><strong>PDF document</strong><span>${esc(f.name)} · ${fileSize(f.size || 0)}</span></div>`}
+        <p class="sub">Added ${f.at ? fdate(f.at.slice(0, 10)) : ''}${f.by ? ` by ${esc(staffName(f.by))}` : ''}</p>`; },
+    foot: () => { const f = meta(); if (!f || f.removed) return '<span class="spacer"></span><button type="button" class="btn primary" data-close>Close</button>';
+      if (st.confirm) return confirmBar('Remove this document from the sale?', 'delYes', 'Remove');
+      return `${canRemoveFile(f) ? '<button type="button" class="btn ghost danger" data-act="delAsk">Remove</button>' : ''}<span class="spacer"></span>${st.url ? `<a class="btn" href="${st.url}" download="${esc(f.name)}">${ic('download')}Download</a><a class="btn primary" href="${st.url}" target="_blank" rel="noopener">Open</a>` : '<button type="button" class="btn primary" data-close>Close</button>'}`; },
+    acts: {
+      delAsk: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
+      delYes: async () => { const f = meta(); if (f && await removeFile(saleId, fid, f)) m.close(); }
+    },
+    onClose: () => { if (st.url) setTimeout(() => URL.revokeObjectURL(st.url), 60000); }
+  });
+  const f = meta();
+  if (f) fetchFile(fid, f).then(b => { st.url = URL.createObjectURL(b); m.render(); })
+    .catch(() => { st.err = S.online ? 'This document couldn’t be opened. It may still be uploading from the phone that added it.' : 'You’re offline and this document isn’t on this device yet. Open it again when the internet is back.'; m.render(); });
+}
+async function onFilePick(el, m){
+  const picked = [...(el.files || [])]; el.value = ''; if (!picked.length) return;
+  const t = el.dataset.file;
+  UI.attaching += picked.length; schedule();
+  try {
+    const ready = [];
+    for (const f of picked){ try { ready.push(await prepFile(f)); } catch (e){ toast(e.message); } }
+    if (!ready.length) return;
+    if (t === 'cart') UI.cartFiles.push(...ready);
+    else if (t.startsWith('sale:')) await attachFiles(t.slice(5), ready);
+  } finally { UI.attaching = Math.max(0, UI.attaching - picked.length); schedule(); }
+}
+const savingFiles = () => UI.attaching ? `<span class="sub saving">Saving ${UI.attaching === 1 ? 'document' : UI.attaching + ' documents'}…</span>` : '';
+
 let pendSeq = 0;
 function trackPending(){
   if (!S.fs) return;
@@ -670,13 +789,24 @@ VIEWS.sell = function(){
 
   const picker = `<section class="panel">
     <div class="panel-h"><div class="search">${ic('search')}<input id="sell-q" class="inp" type="search" placeholder="Search by name, code or brand" value="${esc(c.q)}" data-bind="cart.q" data-rr autocomplete="off" aria-label="Search products"></div><button type="button" class="btn sm" data-act="newProduct">${ic('plus')}Product</button></div>
-    ${shown.length ? `<div class="list">${shown.map(([id, p]) => { const x = D.prod[id] || {stock:0}; const inCart = c.items.find(i => i.productId === id); return `<button type="button" class="li pitem" data-act="cartAdd" data-id="${id}"><span class="nm"><b>${esc(p.name)}</b><span class="sub">${esc([p.sku, p.brand, p.category].filter(Boolean).join(' · ')) || '&nbsp;'}</span></span>${inCart ? `<span class="pill accent">× ${esc(inCart.qty)}</span>` : ''}<span class="pst ${x.stock <= 0 ? 'neg' : ''}">${qtyU(x.stock, p.unit)}</span><span class="pp">${money(p.price)}</span></button>`; }).join('')}</div>${list.length > 40 ? `<p class="sub" style="padding:10px 14px">Showing 40 of ${list.length}. Keep typing to narrow the list.</p>` : ''}`
+    ${shown.length ? `<div class="list">${shown.map(([id, p]) => { const x = D.prod[id] || {stock:0}; const inCart = c.items.find(i => i.productId === id); return `<button type="button" class="li pitem" data-act="cartAdd" data-id="${id}"><span class="nm"><b>${esc(p.name)}</b><span class="sub">${esc([p.sku, p.brand, p.category].filter(Boolean).join(' · ')) || '&nbsp;'}</span></span>${inCart ? `<span class="pill accent">× ${esc(inCart.qty)}</span>` : ''}${p.special ? '<span class="pst">Special order</span><span class="pp"></span>' : `<span class="pst ${x.stock <= 0 ? 'neg' : ''}">${qtyU(x.stock, p.unit)}</span><span class="pp">${money(p.price)}</span>`}</button>`; }).join('')}</div>${list.length > 40 ? `<p class="sub" style="padding:10px 14px">Showing 40 of ${list.length}. Keep typing to narrow the list.</p>` : ''}`
       : (all.length ? `<div class="empty"><strong>No match</strong><span>Nothing matches “${esc(c.q)}”.</span></div>` : emptyBox('No products yet', 'Add the items you sell, with the quantity you have now.', `<button type="button" class="btn primary sm" data-act="newProduct">${ic('plus')}Add product</button>`))}
   </section>`;
 
   const lines = c.items.map((it, i) => {
     const p = S.products[it.productId] || {name: it.name || 'Removed product'}; const x = D.prod[it.productId] || {stock:0, avg:0};
     const qn = num(it.qty), pn = num(it.price);
+    if (it.special){
+      const cn = num(it.cost), prof = qn * (pn - cn);
+      if (it.costAcc && (!S.accounts[it.costAcc] || isUSD(it.costAcc))) it.costAcc = defaultAcc();
+      return `<div class="cline special">
+      <div class="cl-top"><div class="nm"><b>${esc(p.name)}</b><span class="sub">Special order · not taken from stock</span></div><button type="button" class="btn ghost sm iconbtn" data-act="cartRemove" data-i="${i}" aria-label="Remove ${esc(p.name)}">${ic('x')}</button></div>
+      <div class="cl-bot"><input id="cq-${i}" class="inp n qty" inputmode="decimal" value="${esc(it.qty)}" data-bind="cart.items.${i}.qty" data-rr data-sa aria-label="Quantity"><span class="x">×</span><input id="cp-${i}" class="inp n pr" inputmode="decimal" value="${esc(it.price)}" data-bind="cart.items.${i}.price" data-rr data-sa aria-label="Price for the client in GNF" placeholder="Price"><span class="cl-total">${money(qn * pn)}</span></div>
+      <div class="cl-cost"><label for="cc-${i}">You paid${qn > 1 ? ' each' : ''}</label><input id="cc-${i}" class="inp n" inputmode="decimal" value="${esc(it.cost || '')}" data-bind="cart.items.${i}.cost" data-rr data-sa placeholder="Cost"></div>
+      ${hasAccounts() ? `<div class="cl-cost"><label for="ca-${i}">Paid from</label><select id="ca-${i}" class="inp" data-bind="cart.items.${i}.costAcc" data-rr>${accList(a => a.currency !== 'USD' && forStaff(a)).map(([k, a]) => opt(k, a.name, k === it.costAcc)).join('')}${opt('', 'Not paid yet — no account', !it.costAcc)}</select></div>` : ''}
+      ${cn > 0 && pn > 0 ? `<p class="${prof < 0 ? 'errline' : 'sub'}">${prof < 0 ? 'Loss' : 'Profit'} on this line: <b>${money(Math.abs(prof))} GNF</b></p>` : `<p class="sub">Type what you paid, so the profit is right.</p>`}
+    </div>`;
+    }
     const short1 = qn > x.stock, below = pn > 0 && x.avg > 0 && pn < x.avg;
     return `<div class="cline">
       <div class="cl-top"><div class="nm"><b>${esc(p.name)}</b><span class="sub">${itemDetail(it) ? esc(itemDetail(it)) + ' · ' : ''}${qtyU(x.stock, p.unit)} in stock${x.avg ? ` · cost ${money(x.avg)}` : ''}</span></div><button type="button" class="btn ghost sm iconbtn" data-act="cartRemove" data-i="${i}" aria-label="Remove ${esc(p.name)}">${ic('x')}</button></div>
@@ -711,6 +841,9 @@ VIEWS.sell = function(){
         : `<p class="sub">Nothing is received now, so no account changes.</p>`) : ''}
       ${credit > 0.5 ? `<div class="banner" style="padding:9px 12px"><div><b>${money(credit)} GNF on credit</b><span class="sub">${cust ? `Added to what ${esc(cust.name)} owes.` : 'Choose a customer so the balance is tracked.'}</span></div></div>` : ''}
       ${credit < -0.5 ? `<p class="errline">Amount paid is more than the total.</p>` : ''}
+      <div class="field"><span class="lbl">Documents <span class="hint">(optional)</span></span>
+        ${UI.cartFiles.length ? `<div class="docs">${UI.cartFiles.map((f, i) => `<span class="doc">${ic(f.type === 'application/pdf' ? 'file' : 'image')}<span class="doc-n">${esc(f.name)}</span><span class="doc-s">${fileSize(f.size)}</span><button type="button" class="doc-x" data-act="cartFileRemove" data-i="${i}" aria-label="Remove ${esc(f.name)}">${ic('x')}</button></span>`).join('')}</div>` : ''}
+        <span class="inline">${fileInput('sell-file', 'cart')}${savingFiles() || '<span class="hint">Market receipt, the client’s list… kept with the sale.</span>'}</span></div>
       <div class="field"><label for="sell-note">Note <span class="hint">(optional)</span></label><input id="sell-note" class="inp" value="${esc(c.note)}" data-bind="cart.note" placeholder="Delivery, warranty, serial number…"></div>
       ${hasAccounts() && paid > 0.5 && c.items.length ? `<p class="sub"><b>${money(Math.min(paid, total))} GNF</b> goes into <b>${esc(accName(c.accountId))}</b>.</p>` : ''}
       <button type="button" class="btn primary big" data-act="recordSale"${UI.busy || !c.items.length ? ' disabled' : ''}>${UI.busy ? 'Saving…' : `Record sale · ${money(total)} GNF`}</button>
@@ -746,8 +879,9 @@ VIEWS.stock = function(){
   rows = rows.filter(([, p]) => (!UI.stockCat || (p.category || '') === UI.stockCat) && toks.every(t => `${p.name} ${p.sku || ''} ${p.brand || ''}`.toLowerCase().includes(t)));
   if (UI.stockLow) rows = rows.filter(([id]) => isLow(id));
   rows.sort((a, b) => String(a[1].name).localeCompare(String(b[1].name)));
-  const val = sum(rows, ([id]) => Math.max(0, (D.prod[id] || {}).stock || 0) * ((D.prod[id] || {}).avg || 0));
-  const units = sum(rows, ([id]) => Math.max(0, (D.prod[id] || {}).stock || 0));
+  const stk = ([id, p]) => p.special ? 0 : Math.max(0, (D.prod[id] || {}).stock || 0);
+  const val = sum(rows, r => stk(r) * ((D.prod[r[0]] || {}).avg || 0));
+  const units = sum(rows, stk);
   const lowN = Object.keys(S.products).filter(isLow).length;
   return header('Goods', 'Stock', `<button type="button" class="btn" data-act="adjustStock">${ic('adjust')}Adjust stock</button><button type="button" class="btn primary" data-act="newProduct">${ic('plus')}Add product</button>`) +
   `<div class="toolbar"><div class="search">${ic('search')}<input id="stock-q" class="inp" type="search" placeholder="Search products" value="${esc(UI.stockQ)}" data-bind="stockQ" data-rr aria-label="Search products"></div>
@@ -755,12 +889,14 @@ VIEWS.stock = function(){
     <button type="button" class="chip" data-act="stockLow" aria-pressed="${UI.stockLow}">Low stock${lowN ? ` (${lowN})` : ''}</button></div></div>
   <section class="tiles">
     ${tile('Value at cost', val, `${rows.length} product${rows.length === 1 ? '' : 's'} shown`)}
-    ${tile('Potential sales value', sum(rows, ([id, p]) => Math.max(0, (D.prod[id] || {}).stock || 0) * (+p.price || 0)), 'at current sale prices')}
+    ${tile('Potential sales value', sum(rows, r => stk(r) * (+r[1].price || 0)), 'at current sale prices')}
     ${tileRaw('Units in stock', qtyFmt(units), 'all units added together')}
     ${tile('On the way', sum(rows, ([id]) => ((D.prod[id] || {}).transit || 0) * ((D.prod[id] || {}).avg || 0)), 'imports not yet received, at cost')}
   </section>
   <section class="panel">${rows.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Product</th><th class="hide-sm">Category</th><th class="n">In stock</th><th class="n hide-sm">Avg cost</th><th class="n">Sale price</th><th class="n">Margin</th><th class="n hide-sm">Value</th></tr></thead><tbody>
-    ${rows.map(([id, p]) => { const x = D.prod[id] || {stock:0, avg:0, transit:0}; const mg = (+p.price > 0 && x.avg > 0) ? (p.price - x.avg) / p.price : null; const low = isLow(id);
+    ${rows.map(([id, p]) => { const x = D.prod[id] || {stock:0, avg:0, transit:0};
+      if (p.special) return `<tr tabindex="0" class="click" data-act="openProduct" data-id="${id}"><td><b>${esc(p.name)}</b>${p.active === false ? ' <span class="pill">Hidden</span>' : ''}<span class="sub">${esc([p.sku, p.brand].filter(Boolean).join(' · ')) || 'Price and cost typed at each sale'}</span></td><td class="hide-sm">${esc(p.category || '')}</td><td class="n"><span class="pill accent">Special order</span></td><td class="n hide-sm">—</td><td class="n">—</td><td class="n">—</td><td class="n hide-sm">—</td></tr>`;
+      const mg = (+p.price > 0 && x.avg > 0) ? (p.price - x.avg) / p.price : null; const low = isLow(id);
       return `<tr tabindex="0" class="click" data-act="openProduct" data-id="${id}"><td><b>${esc(p.name)}</b>${p.active === false ? ' <span class="pill">Hidden</span>' : ''}<span class="sub">${esc([p.sku, p.brand].filter(Boolean).join(' · '))}${x.transit ? ` · ${qtyFmt(x.transit)} on the way` : ''}</span></td><td class="hide-sm">${esc(p.category || '')}</td><td class="n">${low ? `<span class="pill ${x.stock <= 0 ? 'bad' : 'warn'}">${qtyU(x.stock, p.unit)}</span>` : qtyU(x.stock, p.unit)}</td><td class="n hide-sm">${x.avg ? money(x.avg) : '—'}</td><td class="n">${+p.price ? money(p.price) : '—'}</td><td class="n">${mg == null ? '—' : `<span class="${mg < 0 ? 'errline' : ''}">${pct(mg)}</span>`}</td><td class="n hide-sm">${money(Math.max(0, x.stock) * x.avg)}</td></tr>`; }).join('')}
   </tbody></table></div>` : (Object.keys(S.products).length ? `<div class="empty"><strong>No match</strong><span>No products match these filters.</span></div>` : emptyBox('Your stock list is empty', 'Add each product with the quantity you have today. Purchases and sales then keep the count up to date.', `<button type="button" class="btn primary sm" data-act="newProduct">${ic('plus')}Add product</button>`))}
   ${Object.values(S.products).some(p => p.active === false) ? `<div class="panel-h" style="border-top:1px solid var(--line);border-bottom:0"><span class="sub">Some products are hidden.</span><button type="button" class="btn ghost sm" data-act="stockHidden">${UI.stockHidden ? 'Hide them' : 'Show them'}</button></div>` : ''}
@@ -1223,8 +1359,8 @@ function confirmBar(text, yesAct, yesLabel){ return `<div class="confirmbar"><p>
 function productModal(id, o = {}){
   const src = id ? S.products[id] : null;
   const pid = id || uid();
-  const st = src ? {name:src.name || '', sku:src.sku || '', category:src.category || '', brand:src.brand || '', unit:src.unit || 'piece', price: src.price != null ? String(src.price) : '', cost: src.cost ? String(src.cost) : '', min: src.min ? String(src.min) : '', note:src.note || '', confirm:false}
-                 : {name:o.name || '', sku:'', category:o.category || UI.stockCat || '', brand:'', unit:'piece', price:'', cost:'', min:'', note:'', openQty:'', confirm:false};
+  const st = src ? {name:src.name || '', sku:src.sku || '', category:src.category || '', brand:src.brand || '', unit:src.unit || 'piece', price: src.price != null ? String(src.price) : '', cost: src.cost ? String(src.cost) : '', min: src.min ? String(src.min) : '', note:src.note || '', special: !!src.special, confirm:false}
+                 : {name:o.name || '', sku:'', category:o.category || UI.stockCat || '', brand:'', unit: o.special ? 'lot' : 'piece', price:'', cost:'', min:'', note:'', openQty:'', special: !!o.special, confirm:false};
   const m = openModal({
     state: st, live: !!id, wide: !!id,
     title: () => id ? (st.name || 'Product') : 'Add product',
@@ -1236,14 +1372,27 @@ function productModal(id, o = {}){
         <div class="field"><label for="pm-brand">Brand</label><input id="pm-brand" class="inp" value="${esc(st.brand)}" data-bind="brand" placeholder="LG, Samsung, Grohe…"></div>
         <div class="field"><label for="pm-sku">Code / model</label><input id="pm-sku" class="inp" value="${esc(st.sku)}" data-bind="sku" placeholder="Optional"></div>
         <div class="field"><label for="pm-unit">Sold by</label><select id="pm-unit" class="inp" data-bind="unit">${opts(UNITS, st.unit)}</select></div>
-        <div class="field"><label for="pm-price">Sale price (GNF)</label><input id="pm-price" class="inp n" inputmode="decimal" value="${esc(st.price)}" data-bind="price" data-sa placeholder="0"></div>
+        <div class="field full"><label class="check" for="pm-special"><input type="checkbox" id="pm-special" data-bind="special" data-in="special"${st.special ? ' checked' : ''}><span><b>Special order</b> — bought at the market for a client, no stock kept</span></label><span class="hint">Each time you sell it you type what you paid and which account paid. Good for “Plomberie – divers”.</span></div>
+        ${st.special ? '' : `<div class="field"><label for="pm-price">Sale price (GNF)</label><input id="pm-price" class="inp n" inputmode="decimal" value="${esc(st.price)}" data-bind="price" data-sa placeholder="0"></div>
         <div class="field"><label for="pm-cost">Cost price (GNF)</label><input id="pm-cost" class="inp n" inputmode="decimal" value="${esc(st.cost)}" data-bind="cost" data-sa placeholder="0"><span class="hint">Used until you record a purchase of it</span></div>
         <div class="field"><label for="pm-min">Reorder when stock reaches</label><input id="pm-min" class="inp n" inputmode="decimal" value="${esc(st.min)}" data-bind="min" placeholder="0"></div>
-        ${id ? '' : `<div class="field"><label for="pm-open">Quantity in stock now</label><input id="pm-open" class="inp n" inputmode="decimal" value="${esc(st.openQty)}" data-bind="openQty" placeholder="0"><span class="hint">Recorded as opening stock at the cost price</span></div>`}
+        ${id ? '' : `<div class="field"><label for="pm-open">Quantity in stock now</label><input id="pm-open" class="inp n" inputmode="decimal" value="${esc(st.openQty)}" data-bind="openQty" placeholder="0"><span class="hint">Recorded as opening stock at the cost price</span></div>`}`}
         <div class="field full"><label for="pm-note">Note</label><input id="pm-note" class="inp" value="${esc(st.note)}" data-bind="note" placeholder="Size, color, warranty…"></div>
       </div>`;
       if (!id) return form;
       const cur = S.products[pid] || src;
+      if (cur.special){
+        const ls = []; for (const s of D.sales) if (!s.void) for (const i of s.items) if (i.productId === pid) ls.push(i);
+        const rev = sum(ls, i => i.qty * i.price), cost = sum(ls, i => i.qty * i.cost);
+        return `<section class="tiles">
+          ${tileRaw('Stock', 'Not kept', 'special order')}
+          ${tileRaw('Times sold', String(ls.length), `${qtyFmt(x.sold)} ${esc(cur.unit || 'lot')} in total`)}
+          ${tile('Sold for', rev, 'all invoices')}
+          ${tile('Profit', rev - cost, rev ? `${pct((rev - cost) / rev)} margin` : 'nothing sold yet')}
+        </section>
+        ${form}
+        <div class="sect"><div class="sect-h"><h3>Sales</h3></div>${movements(pid)}</div>`;
+      }
       const mg = (+cur.price > 0 && x.avg > 0) ? (cur.price - x.avg) / cur.price : null;
       return `<section class="tiles">
           ${tileRaw('In stock', `${qtyFmt(x.stock)}<small>${esc((cur.unit || 'piece').toUpperCase())}</small>`, x.transit ? qtyFmt(x.transit) + ' on the way' : 'none on the way')}
@@ -1265,11 +1414,11 @@ function productModal(id, o = {}){
         const dup = Object.entries(S.products).find(([k, p]) => k !== pid && String(p.name).trim().toLowerCase() === name.toLowerCase() && (p.sku || '').trim().toLowerCase() === st.sku.trim().toLowerCase());
         if (dup) return toast('A product with this name and code already exists.');
         const base = S.products[pid] || src || {};
-        const doc = {name, sku: st.sku.trim(), category: st.category.trim(), brand: st.brand.trim(), unit: st.unit, price: isNaN(price) ? 0 : price, cost: isNaN(cost) ? 0 : cost, min: isNaN(min) ? 0 : min, note: st.note.trim(), active: base.active !== false, editedAt: nowIso()};
+        const doc = {name, sku: st.sku.trim(), category: st.category.trim(), brand: st.brand.trim(), unit: st.unit, price: isNaN(price) || st.special ? 0 : price, cost: isNaN(cost) || st.special ? 0 : cost, min: isNaN(min) || st.special ? 0 : min, note: st.note.trim(), special: !!st.special, active: base.active !== false, editedAt: nowIso()};
         if (!src){ doc.createdAt = nowIso(); doc.by = S.email; }
         const ops = [{col:'products', id:pid, data:doc}];
         const open = num(st.openQty);
-        if (!src && open > 0) ops.push({col:'adjustments', id:uid(), merge:false, data:{date: todayStr(), productId: pid, qty: open, unitCost: doc.cost || 0, reason: 'Opening stock', note: '', by: S.email, at: nowIso()}});
+        if (!src && open > 0 && !st.special) ops.push({col:'adjustments', id:uid(), merge:false, data:{date: todayStr(), productId: pid, qty: open, unitCost: doc.cost || 0, reason: 'Opening stock', note: '', by: S.email, at: nowIso()}});
         if (await write(ops, src ? 'Product saved' : 'Product added')){ m.close(); if (o.onSaved) o.onSaved(pid, doc); }
       },
       askDel: () => { st.confirm = true; m.render(); },
@@ -1277,7 +1426,8 @@ function productModal(id, o = {}){
       del: async () => { if (await write([{col:'products', id:pid, data:{deleted:true}}], 'Product deleted')) m.close(); },
       toggleActive: async () => { const cur = S.products[pid] || src; await write([{col:'products', id:pid, data:{active: cur.active === false}}], cur.active === false ? 'Shown in lists again' : 'Hidden from lists'); m.close(); },
       adjustThis: () => adjustModal(pid)
-    }
+    },
+    ins: { special: () => { if (st.special && st.unit === 'piece') st.unit = 'lot'; else if (!st.special && st.unit === 'lot') st.unit = 'piece'; m.render(); } }
   });
 }
 function movements(pid){
@@ -1934,6 +2084,10 @@ function invoiceModal(saleId){
       const accNow = saleAccId(s), canFix = hasAccounts() && s.paid > 0 && !s.void && (S.isOwner || s.by === S.email);
       if (st.acc === undefined) st.acc = accNow || defaultAcc();
       return `${hasAccounts() && s.paid > 0 ? `<div class="banner info noprint" style="align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:180px"><b>${money(s.paid)} GNF received in ${esc(accNow ? accName(accNow) : 'no account')}</b><span class="sub">${s.accountId ? 'Paid at the counter' : accNow ? `Matched from the payment method “${esc(s.method || '')}”` : 'This sale doesn’t say where the money went'}</span></div>${canFix ? `<div class="inline"><label class="sr" for="inv-acc">Change account</label>${accSelect('inv-acc', 'acc', st.acc, {rr: true})}${st.acc !== accNow ? '<button type="button" class="btn primary sm" data-act="fixAcc">Save</button>' : ''}</div>` : ''}</div>` : ''}
+      ${(() => { const sp = s.items.filter(i => i.special); if (!sp.length) return '';
+        return `<div class="banner info noprint"><div><b>Special order · ${money(sum(sp, i => i.qty * i.cost))} GNF paid to the market</b><span class="sub">${sp.map(i => `${esc(i.name)}: ${money(i.qty * i.cost)} from ${esc(i.costAcc ? accName(i.costAcc) : 'no account')}`).join(' · ')} · profit ${money(sum(sp, i => i.qty * (i.price - i.cost)))} GNF</span></div></div>`; })()}
+      ${(() => { const files = liveFiles(S.sales[s.id]);
+        return `<div class="docbar noprint"><span class="lbl">${ic('clip')}Documents</span>${files.length ? `<div class="docs">${fileChips(files, 'openFile')}</div>` : (UI.attaching ? '' : '<span class="sub">None attached</span>')}${savingFiles()}<span class="spacer"></span>${s.void ? '' : fileInput('inv-file', 'sale:' + s.id)}</div>`; })()}
       ${invoiceSheet(s)}
       ${st.showText ? `<div class="field noprint"><label for="inv-text">Copy this text into WhatsApp or SMS</label><textarea id="inv-text" class="inp copytext" readonly>${esc(invoiceText(s))}</textarea></div>` : ''}`;
     },
@@ -1945,6 +2099,7 @@ function invoiceModal(saleId){
         const fallback = () => { st.showText = true; m.render(); const t = document.getElementById('inv-text'); if (t){ t.focus(); t.select(); } };
         try { navigator.clipboard.writeText(txt).then(() => toast('Invoice copied. Paste it into WhatsApp or SMS.'), fallback); } catch { fallback(); } },
       print: () => { const s = find(); if (s) printInvoice(s); },
+      openFile: el => fileViewer(saleId, el.dataset.fid),
       toCustomer: () => { const s = find(); if (s && s.customerId){ m.close(); customerDetail(s.customerId); } },
       voidAsk: () => { st.confirm = true; m.render(); }, confirmNo: () => { st.confirm = false; m.render(); },
       voidYes: async () => { const s = find(); if (!s) return; if (await write([{col:'sales', id:s.id, data:{void: true, voidAt: nowIso(), voidBy: S.email}}], 'Sale voided')){ st.confirm = false; m.render(); } },
@@ -2099,20 +2254,25 @@ const ACT = {
   cartAdd: el => {
     const id = el.dataset.id, p = S.products[id]; if (!p) return;
     const ex = UI.cart.items.find(i => i.productId === id);
-    if (ex) ex.qty = String(r3(num(ex.qty) + 1)); else UI.cart.items.push({productId: id, name: p.name, qty: '1', price: +p.price ? String(p.price) : ''});
+    if (p.special){ if (!ex) UI.cart.items.push({productId: id, name: p.name, qty: '1', price: '', cost: '', special: true, costAcc: hasAccounts() ? defaultAcc() : ''}); }
+    else if (ex) ex.qty = String(r3(num(ex.qty) + 1)); else UI.cart.items.push({productId: id, name: p.name, qty: '1', price: +p.price ? String(p.price) : ''});
     saveDraft(); renderView();
   },
   saleAcc: el => { UI.cart.accountId = el.dataset.v; saveDraft(); renderView(); },
   cartRemove: el => { UI.cart.items.splice(+el.dataset.i, 1); saveDraft(); renderView(); },
-  cartClear: () => { UI.cart = Object.assign(freshCart(), {method: UI.cart.method, accountId: UI.cart.accountId}); saveDraft(); renderView(); },
+  cartClear: () => { UI.cart = Object.assign(freshCart(), {method: UI.cart.method, accountId: UI.cart.accountId}); UI.cartFiles = []; saveDraft(); renderView(); },
+  cartFileRemove: el => { UI.cartFiles.splice(+el.dataset.i, 1); renderView(); },
   paidFull: () => { UI.cart.paidTouched = false; UI.cart.paid = ''; saveDraft(); renderView(); },
   paidCredit: () => { UI.cart.paidTouched = true; UI.cart.paid = '0'; saveDraft(); renderView(); },
   newCustomerForSale: () => customerForm(null, id => { UI.cart.customerId = id; saveDraft(); renderView(); }),
   recordSale: async () => {
     if (UI.busy) return;
     const c = UI.cart;
-    const items = c.items.map(it => ({productId: it.productId, name: (S.products[it.productId] || {}).name || it.name || 'Item', brand: (S.products[it.productId] || {}).brand || '', sku: (S.products[it.productId] || {}).sku || '', qty: num(it.qty), price: num(it.price), cost: Math.round(((D.prod[it.productId] || {}).avg || 0) * 100) / 100}));
+    const items = c.items.map(it => ({productId: it.productId, name: (S.products[it.productId] || {}).name || it.name || 'Item', brand: (S.products[it.productId] || {}).brand || '', sku: (S.products[it.productId] || {}).sku || '', qty: num(it.qty), price: num(it.price),
+      ...(it.special ? {cost: num(it.cost), special: true, costAcc: it.costAcc || ''} : {cost: Math.round(((D.prod[it.productId] || {}).avg || 0) * 100) / 100})}));
     if (!items.length) return toast('Add at least one product.');
+    const noCost = items.find(i => i.special && !(i.cost > 0)); if (noCost) return toast(`Type what you paid for “${noCost.name}”.`);
+    const noPrice = items.find(i => i.special && !(i.price > 0)); if (noPrice) return toast(`Type the client’s price for “${noPrice.name}”.`);
     if (items.some(i => !(i.qty > 0))) return toast('Each line needs a quantity above zero.');
     if (c.items.some(it => it.price !== '' && isNaN(parseNum(it.price)))) return toast('One of the prices isn’t a number.');
     const subtotal = sum(items, i => i.qty * i.price), discount = num(c.discount);
@@ -2125,7 +2285,7 @@ const ACT = {
     UI.busy = true;
     const ok = await write([{col:'sales', id, data: sale, merge:false}], 'Sale recorded');
     UI.busy = false;
-    if (ok){ UI.cart = Object.assign(freshCart(), {method: c.method, accountId: c.accountId}); saveDraft(); renderView(); invoiceModal(id); }
+    if (ok){ const files = UI.cartFiles; UI.cartFiles = []; UI.cart = Object.assign(freshCart(), {method: c.method, accountId: c.accountId}); saveDraft(); renderView(); invoiceModal(id); if (files.length){ UI.attaching += files.length; schedule(); attachFiles(id, files).finally(() => { UI.attaching = Math.max(0, UI.attaching - files.length); schedule(); }); } }
     else renderView();
   },
   addExpense: async () => {
@@ -2166,6 +2326,7 @@ const IN = {
 function onInput(ev){
   const el = ev.target; if (!(el instanceof HTMLElement)) return;
   if (el.id === 'imp-file'){ if (ev.type === 'change') handleImport(el); return; }
+  if (el.dataset && el.dataset.file){ if (ev.type === 'change'){ const sc = el.closest('.scrim'); onFilePick(el, sc ? MODAL_BY_EL.get(sc) : null); } return; }
   if (ev.type === 'change' && !(el.tagName === 'SELECT' || el.type === 'date' || el.type === 'checkbox')) return;
   const scrim = el.closest('.scrim'); const m = scrim ? MODAL_BY_EL.get(scrim) : null;
   const root = m ? m.state : UI;
