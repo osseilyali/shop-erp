@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-25 · 16';
+const APP_VERSION = '2026-11-25 · 17';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates','debts','supdebts'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -1070,7 +1070,9 @@ VIEWS.money = function(){
       <div class="row"><span class="muted">Transfers, fees and count differences</span><span>${money(byKind('tr') + byKind('count'))}</span></div>
       <div class="row grand"><span>Change this month</span><span>${money(sum(rowsM, r => r.amt))} <small class="sub">GNF</small></span></div>
     </div><p class="hint" style="margin-top:10px">Money the owner takes out isn’t an expense, so it doesn’t lower the profit in Reports.</p></div></section>
-  </div>`;
+  </div>
+  ${(() => { const hid = Object.entries(S.accounts).filter(([, a]) => a.active === false); if (!hid.length) return '';
+    return `<section class="panel"><div class="panel-h"><h2>Hidden accounts</h2><span class="sub">Not counted in the totals above</span></div><div class="list">${hid.map(([id, a]) => `<div class="li"><span class="nm"><b>${esc(a.name)}</b><span class="sub">${esc(ACC_TYPES[a.type] || '')} · balance ${esc(fmtAcc((D.acc[id] || {}).bal || 0, a.currency))}</span></span><button type="button" class="btn sm" data-act="unhideAccount" data-id="${id}">Show again</button></div>`).join('')}</div></section>`; })()}`;
 };
 function rateModal(){
   const st = {rate: rateIsToday() ? String(D.rate.rate) : '', date: todayStr()};
@@ -2258,6 +2260,7 @@ const ACT = {
     else if (ex) ex.qty = String(r3(num(ex.qty) + 1)); else UI.cart.items.push({productId: id, name: p.name, qty: '1', price: +p.price ? String(p.price) : ''});
     saveDraft(); renderView();
   },
+  unhideAccount: async el => { await write([{col:'accounts', id: el.dataset.id, data:{active: true}}], 'Account shown again'); },
   saleAcc: el => { UI.cart.accountId = el.dataset.v; saveDraft(); renderView(); },
   cartRemove: el => { UI.cart.items.splice(+el.dataset.i, 1); saveDraft(); renderView(); },
   cartClear: () => { UI.cart = Object.assign(freshCart(), {method: UI.cart.method, accountId: UI.cart.accountId}); UI.cartFiles = []; saveDraft(); renderView(); },
