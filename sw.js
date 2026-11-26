@@ -1,6 +1,6 @@
 // Keeps the app's own files on the device so it opens with no internet.
 // Firebase traffic is never touched here; Firestore keeps its own offline copy of the data.
-const CACHE = 'shop-erp-v17';
+const CACHE = 'shop-erp-v18';
 const SHELL = ['./', './index.html', './app.js', './config.js', './vendor/firebase.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', e => {

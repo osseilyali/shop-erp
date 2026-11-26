@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-25 · 17';
+const APP_VERSION = '2026-11-26 · 18';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates','debts','supdebts'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -1413,8 +1413,10 @@ function productModal(id, o = {}){
         const price = parseNum(st.price), cost = parseNum(st.cost), min = parseNum(st.min);
         if (st.price && isNaN(price)) return toast('The sale price isn’t a number.');
         if (st.cost && isNaN(cost)) return toast('The cost price isn’t a number.');
-        const dup = Object.entries(S.products).find(([k, p]) => k !== pid && String(p.name).trim().toLowerCase() === name.toLowerCase() && (p.sku || '').trim().toLowerCase() === st.sku.trim().toLowerCase());
-        if (dup) return toast('A product with this name and code already exists.');
+        // The same model can exist under different brands: only name + brand + model together must be unique.
+        const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+        const dup = Object.entries(S.products).find(([k, p]) => k !== pid && same(p.name, name) && same(p.sku, st.sku) && same(p.brand, st.brand));
+        if (dup) return toast(`“${[name, st.brand.trim(), st.sku.trim()].filter(Boolean).join(' · ')}” already exists${dup[1].active === false ? ' (hidden)' : ''}.`);
         const base = S.products[pid] || src || {};
         const doc = {name, sku: st.sku.trim(), category: st.category.trim(), brand: st.brand.trim(), unit: st.unit, price: isNaN(price) || st.special ? 0 : price, cost: isNaN(cost) || st.special ? 0 : cost, min: isNaN(min) || st.special ? 0 : min, note: st.note.trim(), special: !!st.special, active: base.active !== false, editedAt: nowIso()};
         if (!src){ doc.createdAt = nowIso(); doc.by = S.email; }
