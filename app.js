@@ -17,7 +17,7 @@ const ADJ_REASONS = ['Opening stock','Stock count correction','Damaged or lost',
 const DEFAULT_CATS = ['Appliances','Plumbing'];
 const ROUTES = ['home','sell','sales','stock','purchases','customers','suppliers','expenses','reports','money','shop','team'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const APP_VERSION = '2026-11-26 · 18';
+const APP_VERSION = '2026-11-26 · 19';
 const COLS = ['config','members','products','customers','suppliers','purchases','adjustments','sales','payments','expenses','accounts','transfers','equity','cashcounts','rates','debts','supdebts'];
 const ACC_TYPES = {cash:'Cash', safe:'Safe', mobile:'Mobile money', bank:'Bank'};
 // Older records only say how they were paid; this maps them to the matching account.
@@ -126,7 +126,7 @@ const UI = {
   purchQ:'', purchStatus:'',
   custQ:'', supQ:'',
   expMonth: todayStr().slice(0,7), exp:{date:todayStr(), category:'Rent', amount:'', method:'Cash', accountId:'', note:''}, accSetup:null, rateQuick:'', rateCheck:null, confirmExp:'',
-  repPeriod:'m:' + todayStr().slice(0,7),
+  repPeriod:'d:today',
   shop:null,
   team:{email:'', name:'', code:''},
   gate:{mode:'signin', email:'', password:'', err:'', note:'', busy:false},
@@ -974,13 +974,41 @@ VIEWS.expenses = function(){
   </div>`;
 };
 
+// Calendar helpers for the daily report. Dates are 'YYYY-MM-DD' strings in the shop's local time.
+const dayShift = (d, n) => { const t = new Date(d + 'T12:00:00'); t.setDate(t.getDate() + n); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; };
+const dayName = d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(d + 'T12:00:00').getDay()];
+const dayPer = d => d === todayStr() ? 'd:today' : d === dayShift(todayStr(), -1) ? 'd:yesterday' : 'd:' + d;
+const repDay = per => per === 'd:today' ? todayStr() : per === 'd:yesterday' ? dayShift(todayStr(), -1) : per.startsWith('d:') ? per.slice(2) : '';
+// One pass over the month: invoices, sales, cost, expenses and profit for every day up to today, newest first.
+function dailyRows(month){
+  const T = todayStr(), acc = {};
+  const R = d => acc[d] || (acc[d] = {n: 0, rev: 0, cogs: 0, ex: 0});
+  for (const x of D.sales) if (!x.void && x.date && x.date.startsWith(month)){ const r = R(x.date); r.n++; r.rev += x.total; r.cogs += x.cogs; }
+  for (const e of [...D.expenses, ...D.extraCosts]) if (!e.void && e.date && e.date.startsWith(month)) R(e.date).ex += e.amount;
+  const [yy, mm] = month.split('-').map(Number), last = month === T.slice(0, 7) ? +T.slice(8) : new Date(yy, mm, 0).getDate();
+  const out = [];
+  for (let d = last; d >= 1; d--){ const k = `${month}-${String(d).padStart(2, '0')}`, r = acc[k] || {n: 0, rev: 0, cogs: 0, ex: 0}; out.push([k, {...r, gross: r.rev - r.cogs, net: r.rev - r.cogs - r.ex}]); }
+  return out;
+}
+function dailyPanel(month, sel){
+  const all = dailyRows(month), T = todayStr(), rows = all.filter(([d, r]) => r.n || r.ex || d === T || d === sel), quiet = all.length - rows.length;
+  const tot = rows.reduce((a, [, r]) => ({n: a.n + r.n, rev: a.rev + r.rev, gross: a.gross + r.gross, ex: a.ex + r.ex, net: a.net + r.net}), {n: 0, rev: 0, gross: 0, ex: 0, net: 0});
+  const cell = (v, cls = '') => v ? `<td class="n ${cls}${v < 0 ? ' neg' : ''}">${money(v)}</td>` : `<td class="n faint ${cls}">—</td>`;
+  return `<section class="panel"><div class="panel-h"><h2>Day by day · ${esc(mlabel(month))}</h2><span class="sub">Tap a day to see its details${quiet ? ` · ${quiet} day${quiet === 1 ? '' : 's'} with no sales or expenses not shown` : ''}</span></div>
+  <div class="scroll"><table class="tbl daily"><thead><tr><th>Day</th><th class="n hide-sm">Invoices</th><th class="n">Sales</th><th class="n">Gross profit</th><th class="n hide-sm">Expenses</th><th class="n">Net profit</th></tr></thead><tbody>
+  ${rows.map(([d, r]) => `<tr tabindex="0" class="click${d === sel ? ' on' : ''}${r.n || r.ex ? '' : ' quiet'}" data-act="repPick" data-v="${dayPer(d)}"><td><b>${dayName(d)} ${+d.slice(8)}</b>${d === T ? ' <span class="pill accent">Today</span>' : ''}</td><td class="n hide-sm">${r.n || '<span class="faint">—</span>'}</td>${cell(r.rev)}${cell(r.gross)}${cell(r.ex, 'hide-sm')}${cell(r.net)}</tr>`).join('')}
+  </tbody><tfoot><tr><td>${esc(mlabel(month))}</td><td class="n hide-sm">${tot.n}</td><td class="n">${money(tot.rev)}</td><td class="n">${money(tot.gross)}</td><td class="n hide-sm">${money(tot.ex)}</td><td class="n${tot.net < 0 ? ' neg' : ''}">${money(tot.net)}</td></tr></tfoot></table></div></section>`;
+}
 VIEWS.reports = function(){
-  const cur = todayStr().slice(0, 7), y = cur.slice(0, 4);
-  const choices = [['m:' + cur, 'This month'], ['m:' + addMonths(cur, -1), 'Last month']];
+  const T = todayStr(), cur = T.slice(0, 7), y = cur.slice(0, 4);
+  const per = UI.repPeriod, day = repDay(per);
+  const choices = [['d:today', `Today · ${dayName(T)} ${fdateShort(T)}`], ['d:yesterday', `Yesterday · ${dayName(dayShift(T, -1))} ${fdateShort(dayShift(T, -1))}`]];
+  if (day && per !== 'd:today' && per !== 'd:yesterday') choices.push([per, `${dayName(day)} ${fdate(day)}`]);
+  choices.push(['m:' + cur, 'This month'], ['m:' + addMonths(cur, -1), 'Last month']);
   for (let i = 2; i < 12; i++){ const k = addMonths(cur, -i); choices.push(['m:' + k, mlabel(k)]); }
   choices.push(['y:' + y, 'This year (' + y + ')'], ['y:' + (+y - 1), 'Last year (' + (+y - 1) + ')'], ['all', 'All time']);
-  const per = UI.repPeriod;
-  const pred = per === 'all' ? () => true : per.startsWith('y:') ? d => d.slice(0, 4) === per.slice(2) : d => d.slice(0, 7) === per.slice(2);
+  const pred = day ? d => d === day : per === 'all' ? () => true : per.startsWith('y:') ? d => d.slice(0, 4) === per.slice(2) : d => d.slice(0, 7) === per.slice(2);
+  const month = day ? day.slice(0, 7) : per.startsWith('m:') ? per.slice(2) : '';
   const st = periodStats(pred);
   const byProd = {}, byCat = {}, byStaff = {}, byMethod = {};
   for (const s of st.ss){
@@ -1001,13 +1029,14 @@ VIEWS.reports = function(){
   const methods = Object.entries(byMethod).sort((a, b) => b[1] - a[1]); const mMax = Math.max(1, ...methods.map(m => m[1]));
   const label = (choices.find(c => c[0] === per) || [0, 'Period'])[1];
   return header('Reports', 'Profit & performance') +
-  `<div class="toolbar"><select id="rep-p" class="inp" data-bind="repPeriod" data-rr aria-label="Period">${choices.map(([v, l]) => opt(v, l, v === per)).join('')}</select><span class="sub">${esc(label)} · ${st.count} invoice${st.count === 1 ? '' : 's'}</span></div>
+  `<div class="toolbar"><select id="rep-p" class="inp" data-bind="repPeriod" data-rr aria-label="Period">${choices.map(([v, l]) => opt(v, l, v === per)).join('')}</select><input id="rep-day" type="date" class="inp" value="${day}" max="${T}" data-in="repDay" aria-label="Pick a day"><span class="sub">${st.count} invoice${st.count === 1 ? '' : 's'}${day && st.expenses ? ` · ${money(st.expenses)} GNF expenses` : ''}</span></div>
   <section class="tiles">
     ${tile('Sales', st.revenue, 'after discounts', '', 'hl')}
     ${tile('Cost of goods sold', st.cogs, 'landed cost of what was sold')}
     ${tile('Gross profit', st.gross, `${pct(st.margin)} margin`, '', st.gross < 0 ? 'neg' : '')}
-    ${tile('Net profit', st.net, `gross profit minus ${short(st.expenses)} expenses`, '', st.net < 0 ? 'neg' : 'pos')}
+    ${tile('Net profit', st.net, `gross profit minus ${short(st.expenses)} expenses`, '', st.net < 0 ? 'neg' : 'up')}
   </section>
+  ${month ? dailyPanel(month, day) : ''}
   <section class="panel"><div class="panel-h"><h2>Last 12 months</h2><div class="legend"><span><i style="background:var(--accent)"></i>Sales</span><span><i style="background:var(--good)"></i>Gross profit</span></div></div><div class="panel-b"><div class="scroll">${monthChart()}</div></div></section>
   <div class="grid2">
     <section class="panel"><div class="panel-h"><h2>By category</h2></div>${cats.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Category</th><th class="n">Sales</th><th class="n">Gross profit</th><th class="n">Margin</th></tr></thead><tbody>${cats.map(([c, v]) => `<tr><td>${esc(c)}</td><td class="n">${money(v.rev)}</td><td class="n">${money(v.rev - v.cost)}</td><td class="n">${pct(v.rev ? (v.rev - v.cost) / v.rev : 0)}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('No sales in this period', 'Pick another period above.')}</section>
@@ -1590,7 +1619,7 @@ function customerDetail(id){
         <section class="tiles">
           ${tile('Bought in total', sum(inv, s => s.total), `${inv.length} invoice${inv.length === 1 ? '' : 's'}`)}
           ${tile('Paid in total', sum(inv, s => s.paid) + sum(pays.filter(p => !p.void), p => p.amount), 'at the counter and later')}
-          ${tile(bal < -0.5 ? 'Credit in advance' : 'Owes you', Math.abs(bal), `${unpaid.length} unpaid invoice${unpaid.length === 1 ? '' : 's'}`, '', bal > 0.5 ? 'neg' : 'pos')}
+          ${tile(bal < -0.5 ? 'Credit in advance' : 'Owes you', Math.abs(bal), `${unpaid.length} unpaid invoice${unpaid.length === 1 ? '' : 's'}`, '', bal > 0.5 ? 'neg' : 'up')}
           ${tileRaw('Last purchase', `<span style="font-size:1.2rem">${inv[0] ? fdate(inv[0].date) : '—'}</span>`, k.phone ? esc(k.phone) : '&nbsp;')}
         </section>
         <div class="sect"><div class="sect-h"><h3>Receive a payment</h3>${bal > 0.5 ? `<span class="sub">Applied to the oldest unpaid invoice first</span>` : ''}</div>
@@ -1747,7 +1776,7 @@ function supplierDetail(id){
         <section class="tiles">
           ${tile('Bought in total', sum(ps, ([pid]) => D.pc[pid].goods), `${ps.length} purchase${ps.length === 1 ? '' : 's'}, goods only`)}
           ${tile('Paid', sum(ps, ([pid]) => D.pc[pid].paid) + sum(olds, d => d.paid), 'to this supplier')}
-          ${tile('You owe', Math.max(0, bal), `${targets.length} unpaid item${targets.length === 1 ? '' : 's'}`, '', bal > 0.5 ? 'neg' : 'pos')}
+          ${tile('You owe', Math.max(0, bal), `${targets.length} unpaid item${targets.length === 1 ? '' : 's'}`, '', bal > 0.5 ? 'neg' : 'up')}
           ${olds.length ? tile('Old debts', sum(olds, d => d.amount), 'from before the app') : tile('Extra costs', sum(ps, ([pid]) => D.pc[pid].extras), 'freight, customs, transport')}
         </section>
         ${targets.length ? `<div class="sect"><h3>Pay this supplier</h3><div class="form">
@@ -2262,6 +2291,7 @@ const ACT = {
     else if (ex) ex.qty = String(r3(num(ex.qty) + 1)); else UI.cart.items.push({productId: id, name: p.name, qty: '1', price: +p.price ? String(p.price) : ''});
     saveDraft(); renderView();
   },
+  repPick: el => { UI.repPeriod = el.dataset.v; renderView(); const t = document.querySelector('#view .tiles'); if (t && t.getBoundingClientRect().top < 0) t.scrollIntoView({block: 'start', behavior: 'smooth'}); },
   unhideAccount: async el => { await write([{col:'accounts', id: el.dataset.id, data:{active: true}}], 'Account shown again'); },
   saleAcc: el => { UI.cart.accountId = el.dataset.v; saveDraft(); renderView(); },
   cartRemove: el => { UI.cart.items.splice(+el.dataset.i, 1); saveDraft(); renderView(); },
@@ -2324,6 +2354,7 @@ const ACT = {
   }
 };
 const IN = {
+  repDay: el => { if (/^\d{4}-\d{2}-\d{2}$/.test(el.value) && el.value <= todayStr()){ UI.repPeriod = dayPer(el.value); renderView(); } },
   paid: el => { UI.cart.paid = el.value; UI.cart.paidTouched = true; saveDraft(); renderView(); }
 };
 
